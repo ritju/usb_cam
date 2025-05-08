@@ -1,6 +1,0 @@
-Invoking command in '/src/usb_cam/build/usb_cam': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/humble /usr/bin/cmake /src/usb_cam -DCMAKE_INSTALL_PREFIX=/src/usb_cam/install/usb_cam
-Invoked command in '/src/usb_cam/build/usb_cam' returned '0': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/humble /usr/bin/cmake /src/usb_cam -DCMAKE_INSTALL_PREFIX=/src/usb_cam/install/usb_cam
-Invoking command in '/src/usb_cam/build/usb_cam': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/humble /usr/bin/cmake --build /src/usb_cam/build/usb_cam -- -j24 -l24
-Invoked command in '/src/usb_cam/build/usb_cam' returned '0': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/humble /usr/bin/cmake --build /src/usb_cam/build/usb_cam -- -j24 -l24
-Invoking command in '/src/usb_cam/build/usb_cam': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/humble /usr/bin/cmake --install /src/usb_cam/build/usb_cam
-Invoked command in '/src/usb_cam/build/usb_cam' returned '0': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/humble /usr/bin/cmake --install /src/usb_cam/build/usb_cam

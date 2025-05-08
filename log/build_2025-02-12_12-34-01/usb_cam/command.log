@@ -1,2 +1,0 @@
-Invoking command in '/src/usb_cam/build/usb_cam': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/humble /usr/bin/cmake --build /src/usb_cam/build/usb_cam -- -j24 -l24
-Invoked command in '/src/usb_cam/build/usb_cam' returned '2': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/humble /usr/bin/cmake --build /src/usb_cam/build/usb_cam -- -j24 -l24
