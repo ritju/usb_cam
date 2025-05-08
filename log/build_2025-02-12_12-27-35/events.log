@@ -1,0 +1,59 @@
+[0.000000] (-) TimerEvent: {}
+[0.000331] (usb_cam) JobQueued: {'identifier': 'usb_cam', 'dependencies': OrderedDict()}
+[0.000817] (usb_cam) JobStarted: {'identifier': 'usb_cam'}
+[0.012800] (usb_cam) JobProgress: {'identifier': 'usb_cam', 'progress': 'cmake'}
+[0.013663] (usb_cam) JobProgress: {'identifier': 'usb_cam', 'progress': 'build'}
+[0.014514] (usb_cam) Command: {'cmd': ['/usr/bin/cmake', '--build', '/src/usb_cam/build/usb_cam', '--', '-j24', '-l24'], 'cwd': '/src/usb_cam/build/usb_cam', 'env': OrderedDict([('NV_LIBCUBLAS_VERSION', '11.11.3.6-1'), ('PANEL_BACK_CAMERA', '1'), ('NV_CUDA_COMPAT_PACKAGE', 'cuda-compat-11-8'), ('HOSTNAME', 'tj2022-Default-string'), ('PANEL_FRONT_CAMERA', '0'), ('FRONT_DEPTH_CAMERA', '0'), ('SHLVL', '1'), ('LD_LIBRARY_PATH', '/capella/lib:/opt/ros/humble/lib/x86_64-linux-gnu:/opt/ros/humble/lib'), ('NV_LIBNCCL_PACKAGE_VERSION', '2.15.5-1'), ('AMENT_CPPCHECK_ALLOW_SLOW_VERSIONS', '1'), ('HOME', '/root'), ('OLDPWD', '/src'), ('ROBOT_VERSION', 'exhibition'), ('PANEL_FRONT_CAMERA_FLIP', '0'), ('ROS_PYTHON_VERSION', '3'), ('NV_LIBNPP_PACKAGE', 'libnpp-11-8=11.8.0.86-1'), ('CUDA_VERSION', '11.8.0'), ('COLCON_PREFIX_PATH', '/capella:/opt/ros/humble'), ('ROS_DISTRO', 'humble'), ('CAPELLA_ROS_HEADLESS', 'True'), ('NV_LIBCUBLAS_PACKAGE_NAME', 'libcublas-11-8'), ('NVIDIA_REQUIRE_CUDA', 'cuda>=11.8 brand=tesla,driver>=470,driver<471 brand=unknown,driver>=470,driver<471 brand=nvidia,driver>=470,driver<471 brand=nvidiartx,driver>=470,driver<471 brand=geforce,driver>=470,driver<471 brand=geforcertx,driver>=470,driver<471 brand=quadro,driver>=470,driver<471 brand=quadrortx,driver>=470,driver<471 brand=titan,driver>=470,driver<471 brand=titanrtx,driver>=470,driver<471'), ('_', '/usr/bin/colcon'), ('ROS_VERSION', '2'), ('NV_LIBCUSPARSE_VERSION', '11.7.5.86-1'), ('NVIDIA_DRIVER_CAPABILITIES', 'compute,video,graphics,utility'), ('NV_CUDA_LIB_VERSION', '11.8.0-1'), ('NV_LIBNCCL_PACKAGE_NAME', 'libnccl2'), ('TERM', 'xterm'), ('NV_CUDA_CUDART_VERSION', '11.8.89-1'), ('ROS_LOCALHOST_ONLY', '0'), ('QT_X11_NO_MITSHM', '1'), ('PATH', '/opt/ros/humble/bin:/usr/local/nvidia/bin:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'), ('NV_LIBCUBLAS_PACKAGE', 'libcublas-11-8=11.11.3.6-1'), ('NVARCH', 'x86_64'), ('PANEL_FRONT_CAMERA_ROTATION', '2'), ('XDG_RUNTIME_DIR', '/tmp/run'), ('DISPLAY', ''), ('NV_LIBNCCL_PACKAGE', 'libnccl2=2.15.5-1+cuda11.8'), ('IMAGE_VERSION', '1.0.9'), ('NVIDIA_PRODUCT_NAME', 'CUDA'), ('LANG', 'en_US.UTF-8'), ('RMW_IMPLEMENTATION', 'rmw_cyclonedds_cpp'), ('LS_COLORS', 'rs=0:di=01;34:ln=01;36:mh=00:pi=40;33:so=01;35:do=01;35:bd=40;33;01:cd=40;33;01:or=40;31;01:mi=00:su=37;41:sg=30;43:ca=30;41:tw=30;42:ow=34;42:st=37;44:ex=01;32:*.tar=01;31:*.tgz=01;31:*.arc=01;31:*.arj=01;31:*.taz=01;31:*.lha=01;31:*.lz4=01;31:*.lzh=01;31:*.lzma=01;31:*.tlz=01;31:*.txz=01;31:*.tzo=01;31:*.t7z=01;31:*.zip=01;31:*.z=01;31:*.dz=01;31:*.gz=01;31:*.lrz=01;31:*.lz=01;31:*.lzo=01;31:*.xz=01;31:*.zst=01;31:*.tzst=01;31:*.bz2=01;31:*.bz=01;31:*.tbz=01;31:*.tbz2=01;31:*.tz=01;31:*.deb=01;31:*.rpm=01;31:*.jar=01;31:*.war=01;31:*.ear=01;31:*.sar=01;31:*.rar=01;31:*.alz=01;31:*.ace=01;31:*.zoo=01;31:*.cpio=01;31:*.7z=01;31:*.rz=01;31:*.cab=01;31:*.wim=01;31:*.swm=01;31:*.dwm=01;31:*.esd=01;31:*.jpg=01;35:*.jpeg=01;35:*.mjpg=01;35:*.mjpeg=01;35:*.gif=01;35:*.bmp=01;35:*.pbm=01;35:*.pgm=01;35:*.ppm=01;35:*.tga=01;35:*.xbm=01;35:*.xpm=01;35:*.tif=01;35:*.tiff=01;35:*.png=01;35:*.svg=01;35:*.svgz=01;35:*.mng=01;35:*.pcx=01;35:*.mov=01;35:*.mpg=01;35:*.mpeg=01;35:*.m2v=01;35:*.mkv=01;35:*.webm=01;35:*.webp=01;35:*.ogm=01;35:*.mp4=01;35:*.m4v=01;35:*.mp4v=01;35:*.vob=01;35:*.qt=01;35:*.nuv=01;35:*.wmv=01;35:*.asf=01;35:*.rm=01;35:*.rmvb=01;35:*.flc=01;35:*.avi=01;35:*.fli=01;35:*.flv=01;35:*.gl=01;35:*.dl=01;35:*.xcf=01;35:*.xwd=01;35:*.yuv=01;35:*.cgm=01;35:*.emf=01;35:*.ogv=01;35:*.ogx=01;35:*.aac=00;36:*.au=00;36:*.flac=00;36:*.m4a=00;36:*.mid=00;36:*.midi=00;36:*.mka=00;36:*.mp3=00;36:*.mpc=00;36:*.ogg=00;36:*.ra=00;36:*.wav=00;36:*.oga=00;36:*.opus=00;36:*.spx=00;36:*.xspf=00;36:'), ('AMENT_PREFIX_PATH', '/capella:/opt/ros/humble'), ('DEBIAN_FRONTEND', 'noninteractive'), ('USE_AD_VIEWER_COUNT', 'False'), ('NV_NVTX_VERSION', '11.8.86-1'), ('NV_LIBNPP_VERSION', '11.8.0.86-1'), ('PWD', '/src/usb_cam/build/usb_cam'), ('PYTHONPATH', '/capella/lib/python3.10/site-packages:/capella/local/lib/python3.10/dist-packages:/opt/ros/humble/local/lib/python3.10/dist-packages:/opt/ros/humble/lib/python3.10/site-packages'), ('NVIDIA_VISIBLE_DEVICES', 'all'), ('NCCL_VERSION', '2.15.5-1'), ('COLCON', '1'), ('CMAKE_PREFIX_PATH', '/capella:/opt/ros/humble')]), 'shell': False}
+[0.067235] (usb_cam) StdoutLine: {'line': b'\x1b[35m\x1b[1mConsolidate compiler generated dependencies of target gtest_main\x1b[0m\n'}
+[0.067662] (usb_cam) StdoutLine: {'line': b'\x1b[35m\x1b[1mConsolidate compiler generated dependencies of target gtest\x1b[0m\n'}
+[0.067746] (usb_cam) StdoutLine: {'line': b'\x1b[35m\x1b[1mConsolidate compiler generated dependencies of target usb_cam\x1b[0m\n'}
+[0.067798] (usb_cam) StdoutLine: {'line': b'\x1b[35m\x1b[1mConsolidate compiler generated dependencies of target usb_cam_node_exe\x1b[0m\n'}
+[0.084253] (usb_cam) StdoutLine: {'line': b'[ 28%] Built target gtest_main\n'}
+[0.084755] (usb_cam) StdoutLine: {'line': b'[ 28%] Built target gtest\n'}
+[0.084864] (usb_cam) StdoutLine: {'line': b'[ 42%] Built target usb_cam\n'}
+[0.090025] (usb_cam) StdoutLine: {'line': b'[ 57%] Built target usb_cam_node_exe\n'}
+[0.100153] (-) TimerEvent: {}
+[0.108192] (usb_cam) StdoutLine: {'line': b'[ 71%] \x1b[32mBuilding CXX object CMakeFiles/test_pixel_formats.dir/test/test_pixel_formats.cpp.o\x1b[0m\n'}
+[0.108613] (usb_cam) StdoutLine: {'line': b'[ 71%] \x1b[32mBuilding CXX object CMakeFiles/usb_cam_node.dir/src/usb_cam_node.cpp.o\x1b[0m\n'}
+[0.108841] (usb_cam) StdoutLine: {'line': b'[ 78%] \x1b[32mBuilding CXX object CMakeFiles/test_usb_cam_utils.dir/test/test_usb_cam_utils.cpp.o\x1b[0m\n'}
+[0.200286] (-) TimerEvent: {}
+[0.230776] (usb_cam) StderrLine: {'line': b'In file included from \x1b[01m\x1b[K/src/usb_cam/src/usb_cam_node.cpp:34\x1b[m\x1b[K:\n'}
+[0.230972] (usb_cam) StderrLine: {'line': b'\x1b[01m\x1b[K/src/usb_cam/include/usb_cam/usb_cam_node.hpp:38:10:\x1b[m\x1b[K \x1b[01;31m\x1b[Kfatal error: \x1b[m\x1b[Kcamera_info_manager/camera_info_manager.hpp: No such file or directory\n'}
+[0.231025] (usb_cam) StderrLine: {'line': b'   38 | #include \x1b[01;31m\x1b[K"camera_info_manager/camera_info_manager.hpp"\x1b[m\x1b[K\n'}
+[0.231066] (usb_cam) StderrLine: {'line': b'      |          \x1b[01;31m\x1b[K^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\x1b[m\x1b[K\n'}
+[0.231103] (usb_cam) StderrLine: {'line': b'compilation terminated.\n'}
+[0.232308] (usb_cam) StderrLine: {'line': b'gmake[2]: *** [CMakeFiles/usb_cam_node.dir/build.make:76: CMakeFiles/usb_cam_node.dir/src/usb_cam_node.cpp.o] Error 1\n'}
+[0.232578] (usb_cam) StderrLine: {'line': b'gmake[1]: *** [CMakeFiles/Makefile2:189: CMakeFiles/usb_cam_node.dir/all] Error 2\n'}
+[0.232673] (usb_cam) StderrLine: {'line': b'gmake[1]: *** Waiting for unfinished jobs....\n'}
+[0.300458] (-) TimerEvent: {}
+[0.401137] (-) TimerEvent: {}
+[0.501621] (-) TimerEvent: {}
+[0.602098] (-) TimerEvent: {}
+[0.702582] (-) TimerEvent: {}
+[0.803010] (-) TimerEvent: {}
+[0.903548] (-) TimerEvent: {}
+[1.004063] (-) TimerEvent: {}
+[1.104764] (-) TimerEvent: {}
+[1.205239] (-) TimerEvent: {}
+[1.305927] (-) TimerEvent: {}
+[1.406413] (-) TimerEvent: {}
+[1.507072] (-) TimerEvent: {}
+[1.608299] (-) TimerEvent: {}
+[1.709312] (-) TimerEvent: {}
+[1.803617] (usb_cam) StdoutLine: {'line': b'[ 85%] \x1b[32m\x1b[1mLinking CXX executable test_usb_cam_utils\x1b[0m\n'}
+[1.809296] (-) TimerEvent: {}
+[1.910004] (-) TimerEvent: {}
+[2.011043] (-) TimerEvent: {}
+[2.111771] (-) TimerEvent: {}
+[2.212906] (-) TimerEvent: {}
+[2.266735] (usb_cam) StdoutLine: {'line': b'[ 85%] Built target test_usb_cam_utils\n'}
+[2.313102] (-) TimerEvent: {}
+[2.325424] (usb_cam) StdoutLine: {'line': b'[ 92%] \x1b[32m\x1b[1mLinking CXX executable test_pixel_formats\x1b[0m\n'}
+[2.413287] (-) TimerEvent: {}
+[2.514054] (-) TimerEvent: {}
+[2.603554] (usb_cam) StdoutLine: {'line': b'[ 92%] Built target test_pixel_formats\n'}
+[2.605496] (usb_cam) StderrLine: {'line': b'gmake: *** [Makefile:146: all] Error 2\n'}
+[2.607842] (usb_cam) CommandEnded: {'returncode': 2}
+[2.614330] (-) TimerEvent: {}
+[2.672142] (usb_cam) JobEnded: {'identifier': 'usb_cam', 'rc': 2}
+[2.682575] (-) EventReactorShutdown: {}

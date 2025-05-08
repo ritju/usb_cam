@@ -1,0 +1,15 @@
+[ 42%] Built target gtest
+[ 42%] Built target usb_cam
+[ 42%] Built target gtest_main
+[ 57%] Built target usb_cam_node_exe
+[ 64%] [32mBuilding CXX object CMakeFiles/usb_cam_node.dir/src/usb_cam_node.cpp.o[0m
+[ 78%] Built target test_usb_cam_utils
+[ 92%] Built target test_pixel_formats
+In file included from [01m[K/src/usb_cam/src/usb_cam_node.cpp:34[m[K:
+[01m[K/src/usb_cam/include/usb_cam/usb_cam_node.hpp:38:10:[m[K [01;31m[Kfatal error: [m[Kcamera_info_manager/camera_info_manager.hpp: No such file or directory
+   38 | #include [01;31m[K"camera_info_manager/camera_info_manager.hpp"[m[K
+      |          [01;31m[K^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~[m[K
+compilation terminated.
+gmake[2]: *** [CMakeFiles/usb_cam_node.dir/build.make:76: CMakeFiles/usb_cam_node.dir/src/usb_cam_node.cpp.o] Error 1
+gmake[1]: *** [CMakeFiles/Makefile2:189: CMakeFiles/usb_cam_node.dir/all] Error 2
+gmake: *** [Makefile:146: all] Error 2
