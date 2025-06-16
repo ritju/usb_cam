@@ -46,7 +46,9 @@ UsbCamNode::UsbCamNode(const rclcpp::NodeOptions & node_options)
   m_compressed_img_msg(nullptr),
   m_image_publisher(std::make_shared<image_transport::CameraPublisher>(
       image_transport::create_camera_publisher(this, BASE_TOPIC_NAME,
-      rmw_qos_profile_sensor_data))),
+      // rmw_qos_profile_sensor_data
+       rclcpp::QoS {100}.get_rmw_qos_profile()
+      ))),
   m_compressed_image_publisher(nullptr),
   m_compressed_cam_info_publisher(nullptr),
   m_parameters(),
@@ -64,10 +66,10 @@ UsbCamNode::UsbCamNode(const rclcpp::NodeOptions & node_options)
   // declare params
   this->declare_parameter("camera_name", "default_cam");
   this->declare_parameter("camera_info_url", "");
-  this->declare_parameter("framerate", 30.0);
+  this->declare_parameter("framerate", 10.0);
   this->declare_parameter("frame_id", "default_cam");
-  this->declare_parameter("image_height", 1080);
-  this->declare_parameter("image_width", 1920);
+  this->declare_parameter("image_height", 360);
+  this->declare_parameter("image_width", 640);
   this->declare_parameter("io_method", "mmap");
   this->declare_parameter("pixel_format", "yuyv2rgb");
   this->declare_parameter("av_device_format", "YUV444P");
