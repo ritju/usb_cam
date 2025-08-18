@@ -45,6 +45,10 @@
 #include "usb_cam/usb_cam.hpp"
 
 
+#include <opencv2/opencv.hpp>
+#include <cv_bridge/cv_bridge.h>
+
+
 std::ostream & operator<<(std::ostream & ostr, const rclcpp::Time & tm)
 {
   ostr << tm.nanoseconds();
@@ -94,6 +98,10 @@ public:
 
   rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr m_service_capture;
   rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr m_parameters_callback_handle;
+
+  cv::Mat cameraMatrix;
+  cv::Mat distCoeffs;
+  void undistortImage(std::unique_ptr<sensor_msgs::msg::Image>& src, std::shared_ptr<camera_info_manager::CameraInfo> camera_info);
 };
 }  // namespace usb_cam
 #endif  // USB_CAM__USB_CAM_NODE_HPP_

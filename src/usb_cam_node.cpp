@@ -34,7 +34,8 @@
 #include "usb_cam/usb_cam_node.hpp"
 #include "usb_cam/utils.hpp"
 
-const char BASE_TOPIC_NAME[] = "camera_panel_front";
+
+const char BASE_TOPIC_NAME[] = "camera_back";
 
 namespace usb_cam
 {
@@ -46,8 +47,8 @@ UsbCamNode::UsbCamNode(const rclcpp::NodeOptions & node_options)
   m_compressed_img_msg(nullptr),
   m_image_publisher(std::make_shared<image_transport::CameraPublisher>(
       image_transport::create_camera_publisher(this, BASE_TOPIC_NAME,
-      // rmw_qos_profile_sensor_data
-       rclcpp::QoS {100}.get_rmw_qos_profile()
+      rmw_qos_profile_default
+      // rmw_qos_profile_sensor_data  // best_effort
       ))),
   m_compressed_image_publisher(nullptr),
   m_compressed_cam_info_publisher(nullptr),
@@ -154,12 +155,25 @@ void UsbCamNode::init()
       this, m_parameters.camera_name, m_parameters.camera_info_url));
   // check for default camera info
   if (!m_camera_info->isCalibrated()) {
+    RCLCPP_INFO(get_logger(), "m_camera_info->isCalibrated(): false");
     m_camera_info->setCameraName(m_parameters.device_name);
     m_camera_info_msg->header.frame_id = m_parameters.frame_id;
     m_camera_info_msg->width = m_parameters.image_width;
     m_camera_info_msg->height = m_parameters.image_height;
     m_camera_info->setCameraInfo(*m_camera_info_msg);
   }
+  else
+  {
+    RCLCPP_INFO(get_logger(), "m_camera_info->isCalibrated(): true");
+  }
+  auto info_msg = m_camera_info->getCameraInfo();
+  cameraMatrix = (cv::Mat_<double>(3,3) << 
+    info_msg.k[0], 0, info_msg.k[2],
+    0, info_msg.k[1], info_msg.k[3],
+    0, 0, 1);
+  distCoeffs = (cv::Mat_<double>(5,1) << 
+    info_msg.d[0], info_msg.d[1], 
+    info_msg.d[2], info_msg.d[3], info_msg.d[4]);
 
   // Check if given device name is an available v4l2 device
   auto available_devices = usb_cam::utils::available_devices();
@@ -361,6 +375,39 @@ void UsbCamNode::set_v4l2_params()
   }
 }
 
+void UsbCamNode::undistortImage(std::unique_ptr<sensor_msgs::msg::Image>& src, std::shared_ptr<camera_info_manager::CameraInfo> camera_info) {
+  // 1. 转换为OpenCV格式 (假设原始图像为BGR8编码)
+  cv_bridge::CvImagePtr cv_ptr;
+  try {
+      cv_ptr = cv_bridge::toCvCopy(*src, sensor_msgs::image_encodings::BGR8);
+  } catch (cv_bridge::Exception& e) {
+      RCLCPP_ERROR(rclcpp::get_logger("undistort"), "转换失败: %s", e.what());
+      return;
+  }
+
+  // 2. 设置相机参数 (示例值，需替换为实际参数)
+  cv::Mat cameraMatrix = (cv::Mat_<double>(3, 3) <<
+    camera_info->k[0],camera_info->k[1],camera_info->k[2], 
+    camera_info->k[3],camera_info->k[4],camera_info->k[5], 
+    camera_info->k[6],camera_info->k[7],camera_info->k[8]
+  );
+  cv::Mat distCoeffs = (cv::Mat_<double>(5, 1) <<
+      camera_info->d[0],camera_info->d[1],camera_info->d[2],camera_info->d[3],camera_info->d[4]
+      // -0.365125, 0.110699, -0.001204, 0.002611, 0.000000
+  );
+
+  // 3. 执行畸变校正
+  cv::Mat dst;
+  cv::undistort(cv_ptr->image, dst, cameraMatrix, distCoeffs);
+
+  // 4. 转回ROS消息格式
+  cv_bridge::CvImage out_msg;
+  out_msg.header = src->header;
+  out_msg.encoding = sensor_msgs::image_encodings::BGR8;
+  out_msg.image = dst;
+  *src = *out_msg.toImageMsg();
+}
+
 bool UsbCamNode::take_and_send_image()
 {
   // Only resize if required
@@ -379,12 +426,13 @@ bool UsbCamNode::take_and_send_image()
 
   // grab the image, pass image msg buffer to fill
   m_camera->get_image(reinterpret_cast<char *>(&m_image_msg->data[0]));
+  *m_camera_info_msg = m_camera_info->getCameraInfo();
+  undistortImage(m_image_msg, m_camera_info_msg);
 
   auto stamp = m_camera->get_image_timestamp();
   m_image_msg->header.stamp.sec = stamp.tv_sec;
   m_image_msg->header.stamp.nanosec = stamp.tv_nsec;
 
-  *m_camera_info_msg = m_camera_info->getCameraInfo();
   m_camera_info_msg->header = m_image_msg->header;
   m_image_publisher->publish(*m_image_msg, *m_camera_info_msg);
   return true;

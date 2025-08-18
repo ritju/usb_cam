@@ -1,15 +1,31 @@
 /**:
     ros__parameters:
-      video_device: "/dev/front_camera"
-      framerate: 15.0
+      video_device: "/dev/rgb_camera_back"
+      framerate: 10.0
       io_method: "mmap"
-      frame_id: "camera"
+      frame_id: "rgb_camera_back"
       pixel_format: "mjpeg2rgb"  # see usb_cam/supported_formats for list of supported formats
       av_device_format: "YUV422P"
-      image_width: 640
-      image_height: 480
-      camera_name: "front_mono_camera"
-      camera_info_url: "package://usb_cam/config/camera_info.yaml"
+
+      # image_width: 1920
+      # image_height: 1080
+      # camera_info_url: "package://usb_cam/config/camera_back_1920x1080.yaml"
+
+      image_width: 1280
+      image_height: 1024
+      camera_info_url: "package://usb_cam/config/camera_back_1280x1024.yaml"
+      
+      # ************ ERROR ************
+      # image_width: 1280
+      # image_height: 720
+      # camera_info_url: "package://usb_cam/config/camera_back_1280x720.yaml"
+
+      # image_width: 800
+      # image_height: 600
+      # camera_info_url: "package://usb_cam/config/camera_back_800x600.yaml"
+
+      camera_name: "rgb_camera_back"
+      # camera_info_url: "package://usb_cam/config/camera_info.yaml"
       brightness: -1
       contrast: -1
       saturation: -1
