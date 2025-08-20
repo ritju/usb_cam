@@ -35,7 +35,7 @@
 #include "usb_cam/utils.hpp"
 
 
-const char BASE_TOPIC_NAME[] = "camera_back";
+const char BASE_TOPIC_NAME[] = "image_raw";
 
 namespace usb_cam
 {
