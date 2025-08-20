@@ -76,7 +76,9 @@ def generate_launch_description():
             name=camera.name,
             namespace=camera.namespace,
             parameters=[camera.param_path],
-            remappings=camera.remappings
+            remappings=camera.remappings,
+            respawn=True,
+            respawn_delay=10,
         )
         for camera in CAMERAS
     ]
