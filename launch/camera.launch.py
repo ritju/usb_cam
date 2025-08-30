@@ -45,23 +45,66 @@ from launch import LaunchDescription  # noqa: E402
 from launch.actions import GroupAction  # noqa: E402
 from launch_ros.actions import Node  # noqa: E402
 
+import json
+print(os.getenv('LAST_DOCKED_DISTANCE_OFFSET'))
+def parse_cameras():
+    # 从环境变量获取CAMERAS值
+    cameras_str = os.getenv('CAMERAS')
+
+    if not cameras_str:
+        print("错误：CAMERAS环境变量未设置")
+        return None
+    
+    # 去除可能的单引号包裹
+    if cameras_str and cameras_str.startswith("'") and cameras_str.endswith("'"):
+        cameras_str = cameras_str[1:-1]
+    
+    # 解析JSON字符串
+    try:
+        # 解析JSON
+        cameras_data = json.loads(cameras_str)
+        
+        # 验证数据结构
+        if not isinstance(cameras_data, list):
+            print("错误：CAMERAS不是一个列表")
+            return None
+            
+        for camera in cameras_data:
+            if not all(key in camera for key in ['name', 'config_file']):
+                print(f"错误：相机配置缺少必要字段 - {camera}")
+                return None
+                
+        return cameras_data
+    except json.JSONDecodeError as e:
+        print(f"JSON解析错误: {e}")
+        return None
 
 CAMERAS = []
-CAMERAS.append(
-    CameraConfig(
-        name='rgb_camera_back',
-        param_path=Path(USB_CAM_DIR, 'config', 'params_back.yaml')
-    )
-    # Add more Camera's here and they will automatically be launched below
-)
+# print(f"USB_CAM_DIR: {USB_CAM_DIR}")
 
-CAMERAS.append(
-    CameraConfig(
-        name='camera1',
-        param_path=Path(USB_CAM_DIR, 'config', 'params_front.yaml')
+camera_infos = parse_cameras()
+
+
+for i in range(len(camera_infos)):
+    print(f'name: {camera_infos[i]["name"]}')
+    print(f'config_file: {camera_infos[i]["config_file"]}')
+
+for i in range(len(camera_infos)):
+# for i in range(0,1):
+    CAMERAS.append( 
+        CameraConfig(
+            name=camera_infos[i]["name"],
+            param_path=Path('/map/config/usb_cam', camera_infos[i]["config_file"])
+        )
     )
-    # Add more Camera's here and they will automatically be launched below
-)
+
+# CAMERAS.append(
+#     CameraConfig(
+#         name='camera1',
+#         param_path=Path(USB_CAM_DIR, 'config', 'params_front.yaml')
+#     )
+#     # Add more Camera's here and they will automatically be launched below
+# )
 
 def generate_launch_description():
     ld = LaunchDescription()
