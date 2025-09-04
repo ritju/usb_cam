@@ -46,7 +46,6 @@ from launch.actions import GroupAction  # noqa: E402
 from launch_ros.actions import Node  # noqa: E402
 
 import json
-print(os.getenv('LAST_DOCKED_DISTANCE_OFFSET'))
 def parse_cameras():
     # 从环境变量获取CAMERAS值
     cameras_str = os.getenv('CAMERAS')
@@ -84,19 +83,19 @@ CAMERAS = []
 
 camera_infos = parse_cameras()
 
+if camera_infos != None:
+    for i in range(len(camera_infos)):
+        print(f'name: {camera_infos[i]["name"]}')
+        print(f'config_file: {camera_infos[i]["config_file"]}')
 
-for i in range(len(camera_infos)):
-    print(f'name: {camera_infos[i]["name"]}')
-    print(f'config_file: {camera_infos[i]["config_file"]}')
-
-for i in range(len(camera_infos)):
-# for i in range(0,1):
-    CAMERAS.append( 
-        CameraConfig(
-            name=camera_infos[i]["name"],
-            param_path=Path('/map/config/usb_cam', camera_infos[i]["config_file"])
+    for i in range(len(camera_infos)):
+    # for i in range(0,1):
+        CAMERAS.append( 
+            CameraConfig(
+                name=camera_infos[i]["name"],
+                param_path=Path('/map/config/usb_cam', camera_infos[i]["config_file"])
+            )
         )
-    )
 
 # CAMERAS.append(
 #     CameraConfig(
