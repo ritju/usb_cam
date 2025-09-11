@@ -86,6 +86,7 @@ UsbCamNode::UsbCamNode(const rclcpp::NodeOptions & node_options)
   this->declare_parameter("exposure", 100);
   this->declare_parameter("autofocus", false);
   this->declare_parameter("focus", -1);  // 0-255, -1 "leave alone"
+  this->declare_parameter("undistort_image", true);
 
   get_params();
   init();
@@ -247,7 +248,7 @@ void UsbCamNode::get_params()
       "camera_name", "camera_info_url", "frame_id", "framerate", "image_height", "image_width",
       "io_method", "pixel_format", "av_device_format", "video_device", "brightness", "contrast",
       "saturation", "sharpness", "gain", "auto_white_balance", "white_balance", "autoexposure",
-      "exposure", "autofocus", "focus"
+      "exposure", "autofocus", "focus", "undistort_image"
     }
   );
 
@@ -299,6 +300,8 @@ void UsbCamNode::assign_params(const std::vector<rclcpp::Parameter> & parameters
       m_parameters.exposure = parameter.as_int();
     } else if (parameter.get_name() == "autofocus") {
       m_parameters.autofocus = parameter.as_bool();
+    } else if (parameter.get_name() == "undistort_image") {
+      m_parameters.undistort_image = parameter.as_bool();
     } else if (parameter.get_name() == "focus") {
       m_parameters.focus = parameter.as_int();
     } else {
@@ -427,7 +430,11 @@ bool UsbCamNode::take_and_send_image()
   // grab the image, pass image msg buffer to fill
   m_camera->get_image(reinterpret_cast<char *>(&m_image_msg->data[0]));
   *m_camera_info_msg = m_camera_info->getCameraInfo();
-  undistortImage(m_image_msg, m_camera_info_msg);
+  RCLCPP_INFO_ONCE(get_logger(), "undistort_image: %s", m_parameters.undistort_image ? "true" : "false");
+  if (m_parameters.undistort_image)
+  {
+    undistortImage(m_image_msg, m_camera_info_msg);
+  }
 
   auto stamp = m_camera->get_image_timestamp();
   m_image_msg->header.stamp.sec = stamp.tv_sec;

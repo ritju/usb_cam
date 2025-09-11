@@ -125,6 +125,7 @@ typedef struct parameters_t
   bool auto_white_balance;
   bool autoexposure;
   bool autofocus;
+  bool undistort_image;
 
   parameters_t()
 // *INDENT-OFF*
@@ -148,7 +149,8 @@ typedef struct parameters_t
     focus(-1),
     auto_white_balance(true),
     autoexposure(true),
-    autofocus(false)
+    autofocus(false),
+    undistort_image(true)
   {
   }
 // *INDENT-ON*

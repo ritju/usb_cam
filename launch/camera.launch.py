@@ -89,7 +89,7 @@ if camera_infos != None:
         print(f'config_file: {camera_infos[i]["config_file"]}')
 
     for i in range(len(camera_infos)):
-    # for i in range(0,1):
+    # for i in range(0,2):
         CAMERAS.append( 
             CameraConfig(
                 name=camera_infos[i]["name"],
