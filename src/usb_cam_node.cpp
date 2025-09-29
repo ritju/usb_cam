@@ -47,8 +47,8 @@ UsbCamNode::UsbCamNode(const rclcpp::NodeOptions & node_options)
   m_compressed_img_msg(nullptr),
   m_image_publisher(std::make_shared<image_transport::CameraPublisher>(
       image_transport::create_camera_publisher(this, BASE_TOPIC_NAME,
-      rmw_qos_profile_default
-      // rmw_qos_profile_sensor_data  // best_effort
+      // rmw_qos_profile_default // reliable
+      rmw_qos_profile_sensor_data  // best_effort
       ))),
   m_compressed_image_publisher(nullptr),
   m_compressed_cam_info_publisher(nullptr),
