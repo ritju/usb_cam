@@ -86,7 +86,10 @@ UsbCamNode::UsbCamNode(const rclcpp::NodeOptions & node_options)
   this->declare_parameter("exposure", 100);
   this->declare_parameter("autofocus", false);
   this->declare_parameter("focus", -1);  // 0-255, -1 "leave alone"
-  this->declare_parameter("undistort_image", true);
+  this->declare_parameter("undistort_image",  false);
+  this->declare_parameter("undistort_image_gpu", false);
+  this->declare_parameter("pub_raw", true);
+  this->declare_parameter("pub_compressed", true);
 
   get_params();
   init();
@@ -195,7 +198,7 @@ void UsbCamNode::init()
 
   // if pixel format is equal to 'mjpeg', i.e. raw mjpeg stream, initialize compressed image message
   // and publisher
-  if (m_parameters.pixel_format_name == "mjpeg") {
+  if (m_parameters.pixel_format_name == "mjpeg2rgb") {
     m_compressed_img_msg.reset(new sensor_msgs::msg::CompressedImage());
     m_compressed_img_msg->header.frame_id = m_parameters.frame_id;
     m_compressed_image_publisher =
@@ -248,7 +251,7 @@ void UsbCamNode::get_params()
       "camera_name", "camera_info_url", "frame_id", "framerate", "image_height", "image_width",
       "io_method", "pixel_format", "av_device_format", "video_device", "brightness", "contrast",
       "saturation", "sharpness", "gain", "auto_white_balance", "white_balance", "autoexposure",
-      "exposure", "autofocus", "focus", "undistort_image"
+      "exposure", "autofocus", "focus", "undistort_image", "undistort_image_gpu", "pub_raw", "pub_compressed"
     }
   );
 
@@ -302,7 +305,13 @@ void UsbCamNode::assign_params(const std::vector<rclcpp::Parameter> & parameters
       m_parameters.autofocus = parameter.as_bool();
     } else if (parameter.get_name() == "undistort_image") {
       m_parameters.undistort_image = parameter.as_bool();
-    } else if (parameter.get_name() == "focus") {
+    } else if (parameter.get_name() == "undistort_image_gpu") {
+      m_parameters.undistort_image_gpu = parameter.as_bool();
+    } else if (parameter.get_name() == "pub_raw") {
+      m_parameters.pub_raw = parameter.as_bool();
+    } else if (parameter.get_name() == "pub_compressed") {
+      m_parameters.pub_compressed = parameter.as_bool();
+    }else if (parameter.get_name() == "focus") {
       m_parameters.focus = parameter.as_int();
     } else {
       RCLCPP_WARN(this->get_logger(), "Invalid parameter name: %s", parameter.get_name().c_str());
@@ -378,7 +387,8 @@ void UsbCamNode::set_v4l2_params()
   }
 }
 
-void UsbCamNode::undistortImage(std::unique_ptr<sensor_msgs::msg::Image>& src, std::shared_ptr<camera_info_manager::CameraInfo> camera_info) {
+void UsbCamNode::undistortImage(std::unique_ptr<sensor_msgs::msg::Image>& src, std::shared_ptr<camera_info_manager::CameraInfo> camera_info) 
+{
   // 1. 转换为OpenCV格式 (假设原始图像为BGR8编码)
   cv_bridge::CvImagePtr cv_ptr;
   try {
@@ -387,6 +397,7 @@ void UsbCamNode::undistortImage(std::unique_ptr<sensor_msgs::msg::Image>& src, s
       RCLCPP_ERROR(rclcpp::get_logger("undistort"), "转换失败: %s", e.what());
       return;
   }
+  cv::Mat mat = cv_ptr->image;
 
   // 2. 设置相机参数 (示例值，需替换为实际参数)
   cv::Mat cameraMatrix = (cv::Mat_<double>(3, 3) <<
@@ -399,16 +410,65 @@ void UsbCamNode::undistortImage(std::unique_ptr<sensor_msgs::msg::Image>& src, s
       // -0.365125, 0.110699, -0.001204, 0.002611, 0.000000
   );
 
+  // 3. 创建映射矩阵 map1, map2
+  cv::Mat Knew = cv::getOptimalNewCameraMatrix(cameraMatrix, distCoeffs, mat.size(), 0.0, mat.size());
+  if(!map_generated)
+  {
+      cv::initUndistortRectifyMap(cameraMatrix, distCoeffs, cv::Mat(), Knew, mat.size(), CV_32FC1, map1, map2);
+      map_generated = true;
+  } 
+
   // 3. 执行畸变校正
-  cv::Mat dst;
-  cv::undistort(cv_ptr->image, dst, cameraMatrix, distCoeffs);
+  undistortImage2(mat);
 
   // 4. 转回ROS消息格式
   cv_bridge::CvImage out_msg;
   out_msg.header = src->header;
   out_msg.encoding = sensor_msgs::image_encodings::BGR8;
-  out_msg.image = dst;
+  out_msg.image = mat;
   *src = *out_msg.toImageMsg();
+}
+
+void UsbCamNode::undistortImage2(cv::Mat& src) 
+{
+  if (!m_parameters.undistort_image_gpu)
+  {
+      // using cpu
+      RCLCPP_INFO_ONCE(get_logger(), "使用cpu矫正图像畸变");
+
+      cv::Mat dst;
+
+      // 方法一
+      // cv::undistort(src, dst, K, D);
+      // src = dst;
+
+      // 方法二         
+      cv::remap(src, dst, map1, map2, cv::INTER_LINEAR);
+      src = dst;
+  }
+  else
+  {
+      // using GPU
+      RCLCPP_INFO_ONCE(get_logger(), "使用gpu校正图像畸变");
+      src = gpuUndistort(src, map1, map2);
+  }
+
+}
+
+cv::Mat UsbCamNode::gpuUndistort(cv::Mat& img, cv::Mat map1, cv::Mat map2) 
+{
+    // 1. GPU加速remap
+    cv::cuda::GpuMat gpuImg, gpuDst, gpuMap1, gpuMap2;
+    gpuImg.upload(img);
+    gpuMap1.upload(map1);
+    gpuMap2.upload(map2);
+    
+    cv::cuda::remap(gpuImg, gpuDst, gpuMap1, gpuMap2, cv::INTER_LINEAR);
+    
+    // 2. 下载结果
+    cv::Mat dst;
+    gpuDst.download(dst);
+    return dst;
 }
 
 bool UsbCamNode::take_and_send_image()
@@ -431,38 +491,57 @@ bool UsbCamNode::take_and_send_image()
   m_camera->get_image(reinterpret_cast<char *>(&m_image_msg->data[0]));
   *m_camera_info_msg = m_camera_info->getCameraInfo();
   RCLCPP_INFO_ONCE(get_logger(), "undistort_image: %s", m_parameters.undistort_image ? "true" : "false");
+  RCLCPP_INFO_ONCE(get_logger(), "undistort_image_gpu: %s", m_parameters.undistort_image_gpu ? "true" : "false");
+  RCLCPP_INFO_ONCE(get_logger(), "pub_raw: %s", m_parameters.pub_raw ? "true" : "false");
+  RCLCPP_INFO_ONCE(get_logger(), "pub_compressed: %s", m_parameters.pub_compressed ? "true" : "false");
   if (m_parameters.undistort_image)
   {
+    RCLCPP_INFO_ONCE(get_logger(), "校正图像畸变");
     undistortImage(m_image_msg, m_camera_info_msg);
   }
+  else
+  {
+    RCLCPP_INFO_ONCE(get_logger(), "未校正图像畸变");
+  }
 
-  auto stamp = m_camera->get_image_timestamp();
-  m_image_msg->header.stamp.sec = stamp.tv_sec;
-  m_image_msg->header.stamp.nanosec = stamp.tv_nsec;
+  if (m_parameters.pub_raw)
+  {
+    auto stamp = m_camera->get_image_timestamp();
+    m_image_msg->header.stamp.sec = stamp.tv_sec;
+    m_image_msg->header.stamp.nanosec = stamp.tv_nsec;
 
-  m_camera_info_msg->header = m_image_msg->header;
-  m_image_publisher->publish(*m_image_msg, *m_camera_info_msg);
+    m_camera_info_msg->header = m_image_msg->header;
+    m_image_publisher->publish(*m_image_msg, *m_camera_info_msg);
+  }
+
+
+  if (m_parameters.pub_compressed)
+  {
+    RCLCPP_INFO_ONCE(get_logger(), "publish compressed image topic.");
+    take_and_send_image_mjpeg();
+  }  
+  
   return true;
 }
 
 bool UsbCamNode::take_and_send_image_mjpeg()
-{
-  // Only resize if required
-  if (sizeof(m_compressed_img_msg->data) != m_camera->get_image_size_in_bytes()) {
-    m_compressed_img_msg->format = "jpeg";
-    m_compressed_img_msg->data.resize(m_camera->get_image_size_in_bytes());
+{  
+  cv_bridge::CvImagePtr cv_ptr;
+  try {
+      // 1. 转换为OpenCV格式 (假设原始图像为BGR8编码)
+      cv_ptr = cv_bridge::toCvCopy(*m_image_msg, sensor_msgs::image_encodings::BGR8);
+      m_compressed_img_msg->header = m_image_msg->header;
+      m_compressed_img_msg->format = "jpeg";
+      
+      // 2. 使用OpenCV进行图像压缩
+      std::vector<int> compression_params;
+      compression_params.push_back(cv::IMWRITE_JPEG_QUALITY);
+      compression_params.push_back(80); // 压缩质量
+      cv::imencode(".jpg", cv_ptr->image, m_compressed_img_msg->data, compression_params);
+  } catch (cv_bridge::Exception& e) {
+      RCLCPP_ERROR(rclcpp::get_logger("undistort"), "转换失败: %s", e.what());
+      return false;
   }
-
-  // grab the image, pass image msg buffer to fill
-  m_camera->get_image(reinterpret_cast<char *>(&m_compressed_img_msg->data[0]));
-
-  auto stamp = m_camera->get_image_timestamp();
-  m_compressed_img_msg->header.stamp.sec = stamp.tv_sec;
-  m_compressed_img_msg->header.stamp.nanosec = stamp.tv_nsec;
-
-  *m_camera_info_msg = m_camera_info->getCameraInfo();
-  m_camera_info_msg->header = m_compressed_img_msg->header;
-
   m_compressed_image_publisher->publish(*m_compressed_img_msg);
   m_compressed_cam_info_publisher->publish(*m_camera_info_msg);
   return true;
@@ -487,14 +566,13 @@ void UsbCamNode::update()
     // If the camera exposure longer higher than the framerate period
     // then that caps the framerate.
     // auto t0 = now();
-    bool isSuccessful = (m_parameters.pixel_format_name == "mjpeg") ?
-      take_and_send_image_mjpeg() :
-      take_and_send_image();
+    bool isSuccessful = take_and_send_image();
     if (!isSuccessful) {
-      RCLCPP_WARN_ONCE(this->get_logger(), "USB camera did not respond in time.");
+      RCLCPP_WARN_ONCE(this->get_logger(), "USB camera did not respond in time.");         
     }
   }
 }
+
 }  // namespace usb_cam
 
 

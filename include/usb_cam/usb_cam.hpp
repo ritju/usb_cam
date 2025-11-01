@@ -126,6 +126,9 @@ typedef struct parameters_t
   bool autoexposure;
   bool autofocus;
   bool undistort_image;
+  bool undistort_image_gpu;
+  bool pub_raw;
+  bool pub_compressed;
 
   parameters_t()
 // *INDENT-OFF*
@@ -150,7 +153,10 @@ typedef struct parameters_t
     auto_white_balance(true),
     autoexposure(true),
     autofocus(false),
-    undistort_image(true)
+    undistort_image(false),
+    undistort_image_gpu(false),
+    pub_raw(true),
+    pub_compressed(true)
   {
   }
 // *INDENT-ON*

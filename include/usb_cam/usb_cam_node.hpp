@@ -44,10 +44,9 @@
 
 #include "usb_cam/usb_cam.hpp"
 
-
 #include <opencv2/opencv.hpp>
 #include <cv_bridge/cv_bridge.h>
-
+#include "opencv2/cudawarping.hpp"
 
 std::ostream & operator<<(std::ostream & ostr, const rclcpp::Time & tm)
 {
@@ -102,6 +101,13 @@ public:
   cv::Mat cameraMatrix;
   cv::Mat distCoeffs;
   void undistortImage(std::unique_ptr<sensor_msgs::msg::Image>& src, std::shared_ptr<camera_info_manager::CameraInfo> camera_info);
+
+  bool map_generated{false};
+  cv::Mat map1, map2;
+
+  void undistortImage2(cv::Mat& src);
+  cv::Mat gpuUndistort(cv::Mat& img, cv::Mat map1, cv::Mat map2);
+
 };
 }  // namespace usb_cam
 #endif  // USB_CAM__USB_CAM_NODE_HPP_

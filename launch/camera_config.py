@@ -56,7 +56,7 @@ class CameraConfig(BaseModel):
             # Automatically set remappings if name is set
             remappings = [
                 ('image_raw', f'{name}/image_raw'),
-                ('image_raw/compressed', f'{name}/image_compressed'),
+                ('image_raw/compressed', f'{name}/compressed'),
                 ('image_raw/compressedDepth', f'{name}/compressedDepth'),
                 ('image_raw/theora', f'{name}/image_raw/theora'),
                 ('camera_info', f'{name}/camera_info'),
