@@ -411,7 +411,8 @@ void UsbCamNode::undistortImage(std::unique_ptr<sensor_msgs::msg::Image>& src, s
   );
 
   // 3. 创建映射矩阵 map1, map2
-  cv::Mat Knew = cv::getOptimalNewCameraMatrix(cameraMatrix, distCoeffs, mat.size(), 0.0, mat.size());
+  // cv::Mat Knew = cv::getOptimalNewCameraMatrix(cameraMatrix, distCoeffs, mat.size(), 0.0, mat.size()); 
+  cv::Mat Knew = cameraMatrix; // 保持一致，保证识别正确的位姿
   if(!map_generated)
   {
       cv::initUndistortRectifyMap(cameraMatrix, distCoeffs, cv::Mat(), Knew, mat.size(), CV_32FC1, map1, map2);
