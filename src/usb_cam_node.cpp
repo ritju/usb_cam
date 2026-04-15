@@ -544,7 +544,11 @@ bool UsbCamNode::take_and_send_image_mjpeg()
       return false;
   }
   m_compressed_image_publisher->publish(*m_compressed_img_msg);
-  m_compressed_cam_info_publisher->publish(*m_camera_info_msg);
+  
+  // 只有 pub_raw 为 false 时，才由压缩路径发布 camera_info
+  if (!m_parameters.pub_raw) {
+      m_compressed_cam_info_publisher->publish(*m_camera_info_msg);
+  }
   return true;
 }
 
