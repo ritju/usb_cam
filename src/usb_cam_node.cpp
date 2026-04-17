@@ -505,13 +505,14 @@ bool UsbCamNode::take_and_send_image()
     RCLCPP_INFO_ONCE(get_logger(), "未校正图像畸变");
   }
 
+  auto stamp = m_camera->get_image_timestamp();
+  m_image_msg->header.stamp.sec = stamp.tv_sec;
+  m_image_msg->header.stamp.nanosec = stamp.tv_nsec;
+
+  m_camera_info_msg->header = m_image_msg->header;
+
   if (m_parameters.pub_raw)
   {
-    auto stamp = m_camera->get_image_timestamp();
-    m_image_msg->header.stamp.sec = stamp.tv_sec;
-    m_image_msg->header.stamp.nanosec = stamp.tv_nsec;
-
-    m_camera_info_msg->header = m_image_msg->header;
     m_image_publisher->publish(*m_image_msg, *m_camera_info_msg);
   }
 
