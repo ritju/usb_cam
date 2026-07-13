@@ -211,12 +211,32 @@ void UsbCamNode::init()
   }
 
   // configure the camera
-  m_camera->configure(m_parameters, io_method);
+  try
+  {
+    m_camera->configure(m_parameters, io_method);
+  }
+  catch (const std::exception& e)
+  {
+    RCLCPP_ERROR(this->get_logger(), "Failed to configure camera: %s", e.what());
+    rclcpp::shutdown();
+    return;
+  }
 
   set_v4l2_params();
 
   // start the camera
-  m_camera->start();
+  try
+  {
+    m_camera->start();
+  }
+  catch (const std::exception& e)
+  {
+    RCLCPP_ERROR(this->get_logger(), "Failed to start camera stream: %s", e.what());
+    RCLCPP_ERROR(this->get_logger(), "Check dmesg for USB/UVC errors");
+    m_camera->shutdown();
+    rclcpp::shutdown();
+    return;
+  }
 
   // TODO(lucasw) should this check a little faster than expected frame rate?
   // TODO(lucasw) how to do small than ms, or fractional ms- std::chrono::nanoseconds?
