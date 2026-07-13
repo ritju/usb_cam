@@ -105,6 +105,9 @@ public:
   bool map_generated{false};
   cv::Mat map1, map2;
 
+  bool gpu_map_uploaded{false};
+  cv::cuda::GpuMat gpuMap1, gpuMap2;
+
   void undistortImage2(cv::Mat& src);
   cv::Mat gpuUndistort(cv::Mat& img, cv::Mat map1, cv::Mat map2);
 

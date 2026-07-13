@@ -9,3 +9,10 @@ docs/xml
 site/
 
 cyclonedds.log
+.vscode
+.devcontainer
+
+build
+install
+log
+.mimocode
