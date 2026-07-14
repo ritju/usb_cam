@@ -31,6 +31,7 @@
 extern "C" {
 #include <linux/videodev2.h>  // Defines V4L2 format constants
 #include <malloc.h>  // for memalign
+#include <sys/ioctl.h>  // for ioctl
 #include <sys/mman.h>  // for mmap
 #include <sys/stat.h>  // for stat
 #include <unistd.h>  // for getpagesize()
@@ -42,6 +43,7 @@ extern "C" {
 #include <iostream>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "opencv2/imgproc.hpp"
@@ -681,54 +683,81 @@ bool UsbCam::set_auto_focus(int value)
 }
 
 /**
-* Set video device parameter via call to v4l-utils.
+* Set video device parameter via ioctl V4L2 controls.
 *
 * @param param The name of the parameter to set
-* @param param The value to assign
+* @param value The value to assign
+* @return true on success, false on failure
 */
 bool UsbCam::set_v4l_parameter(const std::string & param, int value)
 {
-  char buf[33];
-  snprintf(buf, sizeof(buf), "%i", value);
-  return set_v4l_parameter(param, buf);
+  // Parameter name to V4L2 control ID mapping
+  static const std::unordered_map<std::string, int> param_map = {
+    {"brightness", V4L2_CID_BRIGHTNESS},
+    {"contrast", V4L2_CID_CONTRAST},
+    {"saturation", V4L2_CID_SATURATION},
+    {"sharpness", V4L2_CID_SHARPNESS},
+    {"gain", V4L2_CID_GAIN},
+    {"white_balance_temperature_auto", V4L2_CID_DO_WHITE_BALANCE},
+    {"white_balance_temperature", V4L2_CID_WHITE_BALANCE_TEMPERATURE},
+    {"exposure_auto", V4L2_CID_EXPOSURE_AUTO},
+    {"exposure_absolute", V4L2_CID_EXPOSURE_ABSOLUTE},
+    {"focus_auto", V4L2_CID_FOCUS_AUTO},
+    {"focus_absolute", V4L2_CID_FOCUS_ABSOLUTE},
+  };
+
+  // Look up control ID
+  auto it = param_map.find(param);
+  if (it == param_map.end()) {
+    std::cerr << "usb_cam: unknown parameter '" << param << "'" << std::endl;
+    return false;
+  }
+  int control_id = it->second;
+
+  // Query if the control exists on this device
+  struct v4l2_queryctrl query;
+  CLEAR(query);
+  query.id = control_id;
+  if (ioctl(m_fd, VIDIOC_QUERYCTRL, &query) < 0) {
+    std::cerr << "usb_cam: parameter '" << param << "' not supported by device" << std::endl;
+    return false;
+  }
+
+  // Clamp value to device range
+  int clamped = value;
+  if (clamped < query.minimum) {clamped = query.minimum;}
+  if (clamped > query.maximum) {clamped = query.maximum;}
+
+  // Set the control value
+  struct v4l2_control ctrl;
+  CLEAR(ctrl);
+  ctrl.id = control_id;
+  ctrl.value = clamped;
+  if (ioctl(m_fd, VIDIOC_S_CTRL, &ctrl) < 0) {
+    std::cerr << "usb_cam: failed to set '" << param << "' to " << clamped << std::endl;
+    return false;
+  }
+
+  return true;
 }
 
 /**
-* Set video device parameter via call to v4l-utils.
+* Set video device parameter via string value (converted to int).
 *
 * @param param The name of the parameter to set
-* @param param The value to assign
+* @param value The value to assign as string
+* @return true on success, false on failure
 */
 bool UsbCam::set_v4l_parameter(const std::string & param, const std::string & value)
 {
-  int retcode = 0;
-  // build the command
-  std::stringstream ss;
-  ss << "v4l2-ctl --device=" << m_device_name << " -c " << param << "=" << value << " 2>&1";
-  std::string cmd = ss.str();
-
-  // capture the output
-  std::string output;
-  const int kBufferSize = 256;
-  char buffer[kBufferSize];
-  FILE * stream = popen(cmd.c_str(), "r");
-  if (stream) {
-    while (!feof(stream)) {
-      if (fgets(buffer, kBufferSize, stream) != NULL) {
-        output.append(buffer);
-      }
-    }
-    pclose(stream);
-    // any output should be an error
-    if (output.length() > 0) {
-      std::cout << output.c_str() << std::endl;
-      retcode = 1;
-    }
-  } else {
-    std::cerr << "usb_cam_node could not run '" << cmd.c_str() << "'" << std::endl;
-    retcode = 1;
+  try {
+    int int_value = std::stoi(value);
+    return set_v4l_parameter(param, int_value);
+  } catch (const std::exception & e) {
+    std::cerr << "usb_cam: invalid value '" << value << "' for parameter '" << param << "'" <<
+      std::endl;
+    return false;
   }
-  return retcode;
 }
 
 }  // namespace usb_cam
