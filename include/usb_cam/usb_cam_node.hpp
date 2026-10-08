@@ -67,7 +67,7 @@ public:
   void init();
   void get_params();
   void assign_params(const std::vector<rclcpp::Parameter> & parameters);
-  void set_v4l2_params();
+  void apply_camera_controls();
   void update();
   bool take_and_send_image();
   bool take_and_send_image_mjpeg();

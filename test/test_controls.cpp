@@ -1,4 +1,4 @@
-// Copyright 2023 Evan Flynn
+// Copyright 2026 Evan Flynn
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are met:
@@ -10,7 +10,7 @@
 //      notice, this list of conditions and the following disclaimer in the
 //      documentation and/or other materials provided with the distribution.
 //
-//    * Neither the name of the Evan Flynn nor the names of its
+//    * Neither the name of the copyright holder nor the names of its
 //      contributors may be used to endorse or promote products derived from
 //      this software without specific prior written permission.
 //
@@ -26,24 +26,28 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
-
 #include <gtest/gtest.h>
 
-#include <linux/videodev2.h>
+#include <string>
+#include <vector>
 
-#include "usb_cam/formats/pixel_format_base.hpp"
+#include "usb_cam/usb_cam.hpp"
 
-TEST(test_pixel_formats, pixel_format_base_class) {
-  auto test_pix_fmt = usb_cam::formats::default_pixel_format();
+TEST(test_controls, all_known_controls_return_false_without_throwing)
+{
+  usb_cam::UsbCam cam;
+  const std::vector<std::string> names = {
+    "brightness", "contrast", "saturation", "sharpness", "gain",
+    "white_balance_temperature_auto", "white_balance_temperature",
+    "exposure_auto", "exposure_absolute", "focus_auto", "focus_absolute",
+  };
+  for (const auto & name : names) {
+    EXPECT_FALSE(cam.set_camera_control(name, 1)) << name;
+  }
+}
 
-  EXPECT_EQ(test_pix_fmt.name(), "yuyv");
-  EXPECT_EQ(test_pix_fmt.v4l2(), V4L2_PIX_FMT_YUYV);
-  EXPECT_EQ(test_pix_fmt.channels(), 2);
-  EXPECT_EQ(test_pix_fmt.bit_depth(), 8);
-  EXPECT_EQ(test_pix_fmt.requires_conversion(), false);
-
-  EXPECT_EQ(test_pix_fmt.is_bayer(), false);
-  // TOOD(flynneva): should this be true for `yuyv`?
-  EXPECT_EQ(test_pix_fmt.is_color(), false);
-  EXPECT_EQ(test_pix_fmt.is_mono(), false);
+TEST(test_controls, unknown_control_returns_false)
+{
+  usb_cam::UsbCam cam;
+  EXPECT_FALSE(cam.set_camera_control("not_a_control", 42));
 }

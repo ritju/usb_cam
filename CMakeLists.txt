@@ -17,40 +17,31 @@ find_package(OpenCV REQUIRED COMPONENTS core imgproc cudaarithm cudawarping)
 find_package(cv_bridge REQUIRED)
 
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(avcodec REQUIRED libavcodec)
-pkg_check_modules(avutil REQUIRED libavutil)
-pkg_check_modules(swscale REQUIRED libswscale)
-
-if(EXISTS ${avcodec})
-  message(STATUS "Found libavcodec: ${avcodec}")
-endif()
-
-if(EXISTS ${avutil})
-  message(STATUS "Found libavutil: ${avutil}")
-endif()
-
-if(EXISTS ${swscale})
-  message(STATUS "Found libswscale: ${swscale}")
-endif()
+pkg_check_modules(avformat REQUIRED IMPORTED_TARGET libavformat)
+pkg_check_modules(avdevice REQUIRED IMPORTED_TARGET libavdevice)
+pkg_check_modules(avcodec REQUIRED IMPORTED_TARGET libavcodec)
+pkg_check_modules(avutil REQUIRED IMPORTED_TARGET libavutil)
+pkg_check_modules(swscale REQUIRED IMPORTED_TARGET libswscale)
 
 ## Build the USB camera library
 ## Do not use ament_auto here so as to not link to rclcpp
 add_library(${PROJECT_NAME} SHARED
   src/usb_cam.cpp
+  src/ffmpeg_capture.cpp
+  src/format_mapping.cpp
 )
 
 target_include_directories(${PROJECT_NAME} PUBLIC
   "include"
-  ${OpenCV_INCLUDE_DIRS}
-  ${cv_bridge_INCLUDE_DIRS}
 )
 
 target_link_libraries(${PROJECT_NAME}
-  ${avcodec_LIBRARIES}
-  ${avutil_LIBRARIES}
-  ${swscale_LIBRARIES}
-  ${OpenCV_LIBRARIES}
-  ${cv_bridge_LIBRARIES})
+  PkgConfig::avformat
+  PkgConfig::avdevice
+  PkgConfig::avcodec
+  PkgConfig::avutil
+  PkgConfig::swscale
+)
 
 ament_export_libraries(${PROJECT_NAME})
 
@@ -59,8 +50,15 @@ ament_auto_add_library(${PROJECT_NAME}_node SHARED
   src/usb_cam_node.cpp
 )
 
+target_include_directories(${PROJECT_NAME}_node PUBLIC
+  ${OpenCV_INCLUDE_DIRS}
+  ${cv_bridge_INCLUDE_DIRS}
+)
+
 target_link_libraries(${PROJECT_NAME}_node
-  ${PROJECT_NAME})
+  ${PROJECT_NAME}
+  ${OpenCV_LIBRARIES}
+  ${cv_bridge_LIBRARIES})
 
 ## Use node to generate an executable
 rclcpp_components_register_node(${PROJECT_NAME}_node
@@ -76,6 +74,7 @@ if(SANITIZE)
   target_link_libraries(${PROJECT_NAME} -fsanitize=address -fsanitize=leak)
   target_compile_options(${PROJECT_NAME}_node PUBLIC -fsanitize=address -fsanitize=leak)
   target_link_libraries(${PROJECT_NAME}_node -fsanitize=address -fsanitize=leak)
+  target_compile_options(${PROJECT_NAME}_node_exe PUBLIC -fsanitize=address -fsanitize=leak)
   target_link_libraries(${PROJECT_NAME}_node_exe -fsanitize=address -fsanitize=leak)
 endif()
 
@@ -83,21 +82,22 @@ if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
   ament_lint_auto_find_test_dependencies()
   find_package(ament_cmake_gtest)
-  # Unit tests
-  ament_add_gtest(test_usb_cam_utils
-    test/test_usb_cam_utils.cpp)
-  target_link_libraries(test_usb_cam_utils
+  ament_add_gtest(test_format_mapping
+    test/test_format_mapping.cpp)
+  target_link_libraries(test_format_mapping
     ${PROJECT_NAME} m stdc++)
-  ament_add_gtest(test_pixel_formats
-    test/test_pixel_formats.cpp)
-  target_link_libraries(test_pixel_formats
+  ament_add_gtest(test_timestamps
+    test/test_timestamps.cpp)
+  target_link_libraries(test_timestamps
     ${PROJECT_NAME} m stdc++)
-  if(INTEGRATION_TESTS)
-    ament_add_gtest(test_usb_cam_lib
-      test/test_usb_cam_lib.cpp)
-    target_link_libraries(test_usb_cam_lib
-      ${PROJECT_NAME})
-  endif()
+  ament_add_gtest(test_controls
+    test/test_controls.cpp)
+  target_link_libraries(test_controls
+    ${PROJECT_NAME} m stdc++)
+  ament_add_gtest(test_ffmpeg_capture_file
+    test/test_ffmpeg_capture_file.cpp)
+  target_link_libraries(test_ffmpeg_capture_file
+    ${PROJECT_NAME} m stdc++)
 endif()
 
 install(
