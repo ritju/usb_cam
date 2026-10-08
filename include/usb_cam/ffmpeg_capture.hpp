@@ -81,6 +81,9 @@ public:
   size_t frame_size() const {return m_frame_size;}
   std::string encoding() const {return m_encoding;}
   const std::string & device_path() const {return m_device_path;}
+  /// @brief Payload bytes written by the last grab (JPEG size for passthrough).
+  size_t last_payload_size() const {return m_last_payload_size;}
+  bool is_passthrough() const {return m_pass_through;}
 
 private:
   void ensure_sws(const int src_format);
@@ -105,6 +108,7 @@ private:
   int m_sws_src_format{-1};
   bool m_is_capturing{false};
   bool m_pass_through{false};
+  size_t m_last_payload_size{0};
 };
 
 }  // namespace usb_cam

@@ -87,7 +87,7 @@ TEST(test_ffmpeg_capture_file, y4m_fixture_parses_via_ffmpeg)
   avformat_close_input(&fmt);
 }
 
-TEST(test_timestamps, file_stream_pts_are_usable)
+TEST(test_ffmpeg_capture_file, file_stream_pts_are_usable)
 {
   // Sanity: a realistic v4l2-like time_base conversion
   const AVRational tb{1, 1000000};

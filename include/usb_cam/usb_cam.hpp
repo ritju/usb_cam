@@ -136,6 +136,8 @@ public:
   inline timespec get_image_timestamp() const {return m_last_stamp;}
   inline bool is_capturing() const {return m_capture.is_capturing();}
   inline std::string get_device_name() const {return m_capture.device_path();}
+  inline size_t get_last_payload_size() const {return m_capture.last_payload_size();}
+  inline bool is_passthrough() const {return m_capture.is_passthrough();}
 
 private:
   FfmpegCapture m_capture;

@@ -298,7 +298,12 @@ timespec FfmpegCapture::grab(char * dest, size_t dest_size)
     if (m_pass_through) {
       const size_t n = std::min(static_cast<size_t>(m_packet->size), dest_size);
       std::memcpy(dest, m_packet->data, n);
-      const timespec stamp = timestamps::pts_to_timespec(m_packet->pts, m_time_base);
+      m_last_payload_size = n;
+      int64_t ppts = m_packet->pts;
+      if (ppts == AV_NOPTS_VALUE) {
+        ppts = m_packet->dts;
+      }
+      const timespec stamp = timestamps::pts_to_timespec(ppts, m_time_base);
       av_packet_unref(m_packet);
       return stamp;
     }
@@ -327,7 +332,20 @@ timespec FfmpegCapture::grab(char * dest, size_t dest_size)
     }
     const timespec stamp = timestamps::pts_to_timespec(pts, m_time_base);
 
-    if (src_fmt == static_cast<int>(m_format.out_pix_fmt)) {
+    if (m_format.policy == format_mapping::decode_policy_t::Y10_PACK) {
+      // gray16le samples carry 10-bit values; keep the low 10 bits >> 2
+      for (int y = 0; y < m_height; ++y) {
+        const uint8_t * src_row = m_frame->data[0] +
+          static_cast<size_t>(y) * static_cast<size_t>(m_frame->linesize[0]);
+        uint8_t * dst_row = reinterpret_cast<uint8_t *>(dest) +
+          static_cast<size_t>(y) * static_cast<size_t>(m_step);
+        for (int x = 0; x < m_width; ++x) {
+          const uint16_t sample = static_cast<uint16_t>(src_row[2 * x]) |
+            (static_cast<uint16_t>(src_row[2 * x + 1]) << 8);
+          dst_row[x] = static_cast<uint8_t>(sample >> 2);
+        }
+      }
+    } else if (src_fmt == static_cast<int>(m_format.out_pix_fmt)) {
       // Same format: copy rows handling linesize padding
       const int out_step = m_step;
       for (int y = 0; y < m_height; ++y) {
@@ -349,6 +367,7 @@ timespec FfmpegCapture::grab(char * dest, size_t dest_size)
     }
 
     av_frame_unref(m_frame);
+    m_last_payload_size = m_frame_size;
     return stamp;
   }
 

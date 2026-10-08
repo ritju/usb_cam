@@ -168,16 +168,11 @@ void UsbCamNode::init()
   cameraMatrix = (cv::Mat_<double>(3, 3) << info_msg.k[0], 0, info_msg.k[2], 0, info_msg.k[1], info_msg.k[3], 0, 0, 1);
   distCoeffs = (cv::Mat_<double>(5, 1) << info_msg.d[0], info_msg.d[1], info_msg.d[2], info_msg.d[3], info_msg.d[4]);
 
-  // if compressed publishing is enabled, initialize compressed image message
-  // and publishers
+  // Compressed publishers are created lazily on first use so runtime
+  // toggles of pub_compressed cannot hit a null publisher.
   if (m_parameters.pub_compressed)
   {
-    m_compressed_img_msg.reset(new sensor_msgs::msg::CompressedImage());
-    m_compressed_img_msg->header.frame_id = m_parameters.frame_id;
-    m_compressed_image_publisher = this->create_publisher<sensor_msgs::msg::CompressedImage>(
-        std::string(BASE_TOPIC_NAME) + "/compressed", rclcpp::QoS(100));
-    m_compressed_cam_info_publisher =
-        this->create_publisher<sensor_msgs::msg::CameraInfo>("camera_info", rclcpp::QoS(100));
+    ensure_compressed_publishers();
   }
 
   m_image_msg->header.frame_id = m_parameters.frame_id;
@@ -353,6 +348,28 @@ void UsbCamNode::assign_params(const std::vector<rclcpp::Parameter>& parameters)
     {
       RCLCPP_WARN(this->get_logger(), "Invalid parameter name: %s", parameter.get_name().c_str());
     }
+  }
+}
+
+/// @brief Apply camera controls via FFmpeg options when available.
+/// UVC controls are not supported by the FFmpeg v4l2 demuxer; each call
+/// warns once and is non-fatal.
+void UsbCamNode::ensure_compressed_publishers()
+{
+  if (!m_compressed_img_msg)
+  {
+    m_compressed_img_msg.reset(new sensor_msgs::msg::CompressedImage());
+    m_compressed_img_msg->header.frame_id = m_parameters.frame_id;
+  }
+  if (!m_compressed_image_publisher)
+  {
+    m_compressed_image_publisher = this->create_publisher<sensor_msgs::msg::CompressedImage>(
+        std::string(BASE_TOPIC_NAME) + "/compressed", rclcpp::QoS(100));
+  }
+  if (!m_compressed_cam_info_publisher)
+  {
+    m_compressed_cam_info_publisher =
+        this->create_publisher<sensor_msgs::msg::CameraInfo>("camera_info", rclcpp::QoS(100));
   }
 }
 
@@ -580,24 +597,34 @@ bool UsbCamNode::take_and_send_image()
 
 bool UsbCamNode::take_and_send_image_mjpeg()
 {
-  cv_bridge::CvImagePtr cv_ptr;
-  try
-  {
-    // 1. 转换为OpenCV格式 (假设原始图像为BGR8编码)
-    cv_ptr = cv_bridge::toCvCopy(*m_image_msg, sensor_msgs::image_encodings::BGR8);
-    m_compressed_img_msg->header = m_image_msg->header;
-    m_compressed_img_msg->format = "jpeg";
+  ensure_compressed_publishers();
+  m_compressed_img_msg->header = m_image_msg->header;
+  m_compressed_img_msg->format = "jpeg";
 
-    // 2. 使用OpenCV进行图像压缩
-    std::vector<int> compression_params;
-    compression_params.push_back(cv::IMWRITE_JPEG_QUALITY);
-    compression_params.push_back(80);  // 压缩质量
-    cv::imencode(".jpg", cv_ptr->image, m_compressed_img_msg->data, compression_params);
-  }
-  catch (cv_bridge::Exception& e)
+  if (m_camera->is_passthrough())
   {
-    RCLCPP_ERROR(rclcpp::get_logger("undistort"), "转换失败: %s", e.what());
-    return false;
+    // raw_mjpeg: image buffer already holds JPEG payload
+    const size_t n = m_camera->get_last_payload_size();
+    m_compressed_img_msg->data.assign(
+      m_image_msg->data.begin(),
+      m_image_msg->data.begin() + static_cast<std::ptrdiff_t>(std::min(n, m_image_msg->data.size())));
+  }
+  else
+  {
+    cv_bridge::CvImagePtr cv_ptr;
+    try
+    {
+      cv_ptr = cv_bridge::toCvCopy(*m_image_msg, sensor_msgs::image_encodings::BGR8);
+      std::vector<int> compression_params;
+      compression_params.push_back(cv::IMWRITE_JPEG_QUALITY);
+      compression_params.push_back(80);
+      cv::imencode(".jpg", cv_ptr->image, m_compressed_img_msg->data, compression_params);
+    }
+    catch (cv_bridge::Exception& e)
+    {
+      RCLCPP_ERROR(rclcpp::get_logger("undistort"), "转换失败: %s", e.what());
+      return false;
+    }
   }
   m_compressed_image_publisher->publish(*m_compressed_img_msg);
 

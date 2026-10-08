@@ -65,7 +65,7 @@ const std::unordered_map<std::string, capture_format_t> & table()
     {"m4202rgb",
       {"m4202rgb", "yuv420p", decode_policy_t::RAW_SWS, AV_PIX_FMT_RGB24, "rgb8", 3}},
     {"y102mono8",
-      {"y102mono8", "gray16le", decode_policy_t::RAW_SWS, AV_PIX_FMT_GRAY8, "mono8", 1}},
+      {"y102mono8", "gray16le", decode_policy_t::Y10_PACK, AV_PIX_FMT_GRAY8, "mono8", 1}},
   };
   return kTable;
 }

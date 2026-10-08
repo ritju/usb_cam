@@ -50,6 +50,8 @@ enum class decode_policy_t
   RAW_SWS,
   /// @brief copy compressed packet bytes as-is (raw_mjpeg)
   PACKET_PASSTHROUGH,
+  /// @brief gray16le carrying 10-bit samples, pack >>2 to GRAY8
+  Y10_PACK,
 };
 
 struct capture_format_t
