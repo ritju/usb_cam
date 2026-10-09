@@ -491,7 +491,7 @@ void UsbCamNode::undistortImage2(cv::Mat& src)
     const auto t1 = std::chrono::steady_clock::now();
     const double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
     RCLCPP_INFO_THROTTLE(
-      get_logger(), *get_clock(), 1000,
+      get_logger(), *get_clock(), 5000,
       "undistort cpu cost: %.2f ms (%dx%d)", ms, src.cols, src.rows);
   }
   else
@@ -515,7 +515,7 @@ cv::Mat UsbCamNode::gpuUndistort(cv::Mat& img, cv::Mat map1, cv::Mat map2)
       const auto t1 = std::chrono::steady_clock::now();
       const double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
       RCLCPP_INFO_THROTTLE(
-        get_logger(), *get_clock(), 1000,
+        get_logger(), *get_clock(), 5000,
         "undistort cpu(fallback) cost: %.2f ms (%dx%d)", ms, img.cols, img.rows);
       return dst;
     }
@@ -527,9 +527,17 @@ cv::Mat UsbCamNode::gpuUndistort(cv::Mat& img, cv::Mat map1, cv::Mat map2)
       gpu_map_uploaded = true;
     }
 
-    cv::cuda::GpuMat gpuImg, gpuDst;
-    gpuImg.upload(img);
+    if (m_gpu_img_pool.empty())
+    {
+      m_gpu_img_pool.resize(kGpuPoolSize);
+      m_gpu_dst_pool.resize(kGpuPoolSize);
+    }
 
+    const int slot = m_gpu_slot.fetch_add(1) % kGpuPoolSize;
+    cv::cuda::GpuMat& gpuImg = m_gpu_img_pool[slot];
+    cv::cuda::GpuMat& gpuDst = m_gpu_dst_pool[slot];
+
+    gpuImg.upload(img);
     cv::cuda::remap(gpuImg, gpuDst, gpuMap1, gpuMap2, cv::INTER_LINEAR, cv::BORDER_REFLECT);
 
     cv::Mat dst;
@@ -537,7 +545,7 @@ cv::Mat UsbCamNode::gpuUndistort(cv::Mat& img, cv::Mat map1, cv::Mat map2)
     const auto t1 = std::chrono::steady_clock::now();
     const double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
     RCLCPP_INFO_THROTTLE(
-      get_logger(), *get_clock(), 1000,
+      get_logger(), *get_clock(), 5000,
       "undistort gpu cost: %.2f ms (%dx%d)", ms, img.cols, img.rows);
     return dst;
   }
