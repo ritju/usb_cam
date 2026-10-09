@@ -26,6 +26,7 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
+#include <chrono>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -483,15 +484,15 @@ void UsbCamNode::undistortImage2(cv::Mat& src)
     // using cpu
     RCLCPP_INFO_ONCE(get_logger(), "使用cpu矫正图像畸变");
 
+    const auto t0 = std::chrono::steady_clock::now();
     cv::Mat dst;
-
-    // 方法一
-    // cv::undistort(src, dst, K, D);
-    // src = dst;
-
-    // 方法二
     cv::remap(src, dst, map1, map2, cv::INTER_LINEAR);
     src = dst;
+    const auto t1 = std::chrono::steady_clock::now();
+    const double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+    RCLCPP_INFO_THROTTLE(
+      get_logger(), *get_clock(), 1000,
+      "undistort cpu cost: %.2f ms (%dx%d)", ms, src.cols, src.rows);
   }
   else
   {
@@ -503,6 +504,7 @@ void UsbCamNode::undistortImage2(cv::Mat& src)
 
 cv::Mat UsbCamNode::gpuUndistort(cv::Mat& img, cv::Mat map1, cv::Mat map2)
 {
+  const auto t0 = std::chrono::steady_clock::now();
   try
   {
     if (cv::cuda::getCudaEnabledDeviceCount() == 0)
@@ -510,6 +512,11 @@ cv::Mat UsbCamNode::gpuUndistort(cv::Mat& img, cv::Mat map1, cv::Mat map2)
       RCLCPP_WARN(get_logger(), "No CUDA device available, falling back to CPU");
       cv::Mat dst;
       cv::remap(img, dst, map1, map2, cv::INTER_LINEAR);
+      const auto t1 = std::chrono::steady_clock::now();
+      const double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+      RCLCPP_INFO_THROTTLE(
+        get_logger(), *get_clock(), 1000,
+        "undistort cpu(fallback) cost: %.2f ms (%dx%d)", ms, img.cols, img.rows);
       return dst;
     }
 
@@ -527,6 +534,11 @@ cv::Mat UsbCamNode::gpuUndistort(cv::Mat& img, cv::Mat map1, cv::Mat map2)
 
     cv::Mat dst;
     gpuDst.download(dst);
+    const auto t1 = std::chrono::steady_clock::now();
+    const double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+    RCLCPP_INFO_THROTTLE(
+      get_logger(), *get_clock(), 1000,
+      "undistort gpu cost: %.2f ms (%dx%d)", ms, img.cols, img.rows);
     return dst;
   }
   catch (const cv::Exception& e)
