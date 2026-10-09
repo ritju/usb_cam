@@ -32,6 +32,7 @@
 #define USB_CAM__USB_CAM_NODE_HPP_
 
 #include <atomic>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
@@ -110,13 +111,12 @@ public:
   bool gpu_map_uploaded{false};
   cv::cuda::GpuMat gpuMap1, gpuMap2;
 
-  // Reusable GPU work buffers (sync path). 3 slots sized for a later async
-  // pipeline; index advances so consecutive frames do not reuse a buffer
-  // that is still conceptually "in use".
-  static constexpr int kGpuPoolSize = 3;
+  // Reusable GPU work buffers (sync path). 2 slots; uint8 wraps cleanly
+  // (255 -> 0) so the slot index never has signed overflow UB.
+  static constexpr int kGpuPoolSize = 2;
   std::vector<cv::cuda::GpuMat> m_gpu_img_pool;
   std::vector<cv::cuda::GpuMat> m_gpu_dst_pool;
-  std::atomic<int> m_gpu_slot{0};
+  std::atomic<uint8_t> m_gpu_slot{0};
 
   void undistortImage2(cv::Mat& src);
   cv::Mat gpuUndistort(cv::Mat& img, cv::Mat map1, cv::Mat map2);

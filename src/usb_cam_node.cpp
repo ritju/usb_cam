@@ -533,7 +533,7 @@ cv::Mat UsbCamNode::gpuUndistort(cv::Mat& img, cv::Mat map1, cv::Mat map2)
       m_gpu_dst_pool.resize(kGpuPoolSize);
     }
 
-    const int slot = m_gpu_slot.fetch_add(1) % kGpuPoolSize;
+    const int slot = static_cast<int>(m_gpu_slot.fetch_add(1) % kGpuPoolSize);
     cv::cuda::GpuMat& gpuImg = m_gpu_img_pool[slot];
     cv::cuda::GpuMat& gpuDst = m_gpu_dst_pool[slot];
 
