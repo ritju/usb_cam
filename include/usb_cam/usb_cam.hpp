@@ -414,6 +414,7 @@ private:
   void init_mmap();
   void init_userp();
   void init_device();
+  void validate_sizeimage();
 
   void open_device();
   void grab_image();
@@ -421,12 +422,15 @@ private:
   void process_image(const char * src, char * & dest, const int & bytes_used);
 
   void uninit_device();
+  void free_buffers();
   void close_device();
 
   std::string m_device_name;
   usb_cam::utils::io_method_t m_io;
   int m_fd;
   unsigned int m_number_of_buffers;
+  /// Upper bound accepted for a single V4L2 buffer, set by validate_sizeimage()
+  size_t m_max_buffer_bytes;
   std::shared_ptr<usb_cam::utils::buffer[]> m_buffers;
   image_t m_image;
 

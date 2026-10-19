@@ -218,6 +218,19 @@ void UsbCamNode::init()
   catch (const std::exception& e)
   {
     RCLCPP_ERROR(this->get_logger(), "Failed to configure camera: %s", e.what());
+    // Release the device before giving up. An fd left open keeps the vb2 queue
+    // and its kernel-side buffers alive, and holds the camera out of reach of
+    // whatever launch runs next.
+    try
+    {
+      m_camera->shutdown();
+    }
+    catch (...)
+    {
+      // usb_cam throws a bare `char *` from some error paths, which is not a
+      // std::exception; teardown must never abort the node.
+      RCLCPP_WARN(this->get_logger(), "Camera teardown also failed while handling configure error");
+    }
     rclcpp::shutdown();
     return;
   }

@@ -58,10 +58,20 @@ namespace usb_cam
 
 using utils::io_method_t;
 
+/// A driver may legitimately report more than the raw frame size (compressed
+/// formats carry a worst-case bound, and rows get padded), but anything beyond
+/// this multiple of the expected frame size means the format descriptor is
+/// corrupt rather than that a real buffer is needed.
+constexpr size_t kMaxSizeimageFactor = 4;
+
 
 UsbCam::UsbCam()
 : m_device_name(), m_io(io_method_t::IO_METHOD_MMAP), m_fd(-1),
-  m_number_of_buffers(4), m_buffers(new usb_cam::utils::buffer[m_number_of_buffers]), m_image(),
+  m_number_of_buffers(4), m_max_buffer_bytes(0),
+  // Value-initialize so that a partially completed init_mmap()/init_userp()
+  // leaves nullptr entries behind; uninit_device() must never munmap/free an
+  // indeterminate pointer when unwinding an error path.
+  m_buffers(new usb_cam::utils::buffer[m_number_of_buffers]()), m_image(),
   m_avframe(NULL), m_avcodec(NULL), m_avoptions(NULL),
   m_avcodec_context(NULL), m_is_capturing(false), m_framerate(0),
   m_epoch_time_shift_us(usb_cam::utils::get_epoch_time_shift_us()), m_supported_formats()
@@ -269,7 +279,67 @@ void UsbCam::start_capturing()
 
 void UsbCam::uninit_device()
 {
+  if (!m_buffers) {
+    return;
+  }
+
+  bool released_any = false;
+
+  switch (m_io) {
+    case io_method_t::IO_METHOD_MMAP:
+      for (uint32_t i = 0; i < m_number_of_buffers; ++i) {
+        if (m_buffers[i].start == nullptr) {continue;}
+        munmap(m_buffers[i].start, m_buffers[i].length);
+        m_buffers[i].start = nullptr;
+        released_any = true;
+      }
+      break;
+
+    case io_method_t::IO_METHOD_USERPTR:
+      for (uint32_t i = 0; i < m_number_of_buffers; ++i) {
+        if (m_buffers[i].start == nullptr) {continue;}
+        free(m_buffers[i].start);
+        m_buffers[i].start = nullptr;
+        released_any = true;
+      }
+      break;
+
+    case io_method_t::IO_METHOD_READ:
+      if (m_buffers[0].start != nullptr) {
+        free(m_buffers[0].start);
+        m_buffers[0].start = nullptr;
+      }
+      break;
+
+    case io_method_t::IO_METHOD_UNKNOWN:
+      break;
+  }
+
+  // Drop the vb2 queue instead of leaving it to close(m_fd). A node that is
+  // killed or hangs before close_device() runs would otherwise leave the
+  // buffers resident in kernel memory, which is charged to VmallocUsed rather
+  // than to any process and so is invisible in top.
+  if (released_any) {
+    free_buffers();
+  }
+
   m_buffers.reset();
+}
+
+void UsbCam::free_buffers()
+{
+  struct v4l2_requestbuffers req;
+
+  CLEAR(req);
+
+  req.count = 0;
+  req.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+  req.memory = (m_io == io_method_t::IO_METHOD_MMAP) ? V4L2_MEMORY_MMAP : V4L2_MEMORY_USERPTR;
+
+  // Not fatal: close_device() releases the queue as a backstop.
+  if (-1 == usb_cam::utils::xioctl(m_fd, static_cast<int>(VIDIOC_REQBUFS), &req)) {
+    std::cerr << "usb_cam: VIDIOC_REQBUFS(0) failed: " << strerror(errno) << std::endl;
+  }
 }
 
 void UsbCam::init_read()
@@ -279,6 +349,7 @@ void UsbCam::init_read()
   }
 
   m_buffers[0].length = m_image.size_in_bytes;
+  m_buffers[0].start = static_cast<char *>(calloc(1, m_image.size_in_bytes));
 
   if (!m_buffers[0].start) {
     throw std::overflow_error("Out of memory");
@@ -322,6 +393,15 @@ void UsbCam::init_mmap()
 
     if (-1 == usb_cam::utils::xioctl(m_fd, static_cast<int>(VIDIOC_QUERYBUF), &buf)) {
       throw std::runtime_error("Unable to query status of buffer");
+    }
+
+    // validate_sizeimage() already ran before REQBUFS, so this only catches a
+    // driver reporting a per-buffer length inconsistent with the format it just
+    // accepted. Never mmap an unbounded length from the driver.
+    if (buf.length == 0 || buf.length > m_max_buffer_bytes) {
+      throw std::runtime_error(
+              "Driver reported an implausible buffer length of " + std::to_string(buf.length) +
+              " bytes (limit " + std::to_string(m_max_buffer_bytes) + "), refusing to mmap");
     }
 
     m_buffers[current_buffer].length = buf.length;
@@ -371,6 +451,47 @@ void UsbCam::init_userp()
       throw std::overflow_error("Out of memory");
     }
   }
+}
+
+/// @brief Reject an implausible driver-reported sizeimage before any buffer is
+/// allocated, and record the accepted upper bound in m_max_buffer_bytes.
+/// @details VIDIOC_REQBUFS makes the kernel allocate m_number_of_buffers copies
+/// of sizeimage. That memory is charged to VmallocUsed, not to this process, so
+/// an oversized value is invisible in top and can OOM the whole machine. A
+/// corrupt UVC frame descriptor -- observed after device re-enumeration and when
+/// a second fd issues S_FMT on an already-streaming device -- can report
+/// gigabytes here.
+void UsbCam::validate_sizeimage()
+{
+  const struct v4l2_pix_format & pix = m_image.v4l2_fmt.fmt.pix;
+
+  // Derive the expectation from the dimensions the driver actually accepted,
+  // since VIDIOC_S_FMT is free to round width/height, and from the format we
+  // asked for rather than m_image.size_in_bytes, which was computed from the
+  // requested dimensions.
+  const size_t expected = static_cast<size_t>(pix.width) * pix.height *
+    m_image.pixel_format->byte_depth() * m_image.pixel_format->channels();
+  const size_t limit = expected * kMaxSizeimageFactor;
+
+  if (pix.sizeimage > limit) {
+    throw std::runtime_error(
+            "Driver reported an implausible sizeimage of " + std::to_string(pix.sizeimage) +
+            " bytes for " + std::to_string(pix.width) + "x" + std::to_string(pix.height) + " " +
+            m_image.pixel_format->v4l2_str() + " (expected at most " + std::to_string(limit) +
+            " bytes); refusing to allocate " + std::to_string(m_number_of_buffers) +
+            " such buffers. Check `v4l2-ctl --get-fmt-video` and re-plug the device.");
+  }
+
+  if (pix.sizeimage == 0) {
+    // Some drivers leave this unset and still work, so keep the old behaviour
+    // and only bound what init_mmap() will accept.
+    std::cerr << "usb_cam: driver reported sizeimage 0 for " << pix.width << "x" << pix.height <<
+      " " << m_image.pixel_format->v4l2_str() << std::endl;
+    m_max_buffer_bytes = limit;
+    return;
+  }
+
+  m_max_buffer_bytes = pix.sizeimage;
 }
 
 void UsbCam::init_device()
@@ -431,6 +552,7 @@ void UsbCam::init_device()
     /* Errors ignored. */
   }
 
+  CLEAR(m_image.v4l2_fmt);
   m_image.v4l2_fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
   m_image.v4l2_fmt.fmt.pix.width = m_image.width;
   m_image.v4l2_fmt.fmt.pix.height = m_image.height;
@@ -442,6 +564,10 @@ void UsbCam::init_device()
   if (-1 == usb_cam::utils::xioctl(m_fd, static_cast<int>(VIDIOC_S_FMT), &m_image.v4l2_fmt)) {
     throw strerror(errno);
   }
+
+  // Must run before VIDIOC_REQBUFS below: that ioctl is what actually commits
+  // the kernel allocation of m_number_of_buffers * sizeimage bytes.
+  validate_sizeimage();
 
   struct v4l2_streamparm stream_params;
   memset(&stream_params, 0, sizeof(stream_params));
