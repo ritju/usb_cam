@@ -558,13 +558,12 @@ void UsbCam::init_device()
     throw std::runtime_error(std::string("VIDIOC_S_FMT failed: ") + strerror(errno));
   }
 
-  // Adopt the geometry the driver actually accepted so size_in_bytes and the
-  // copy path match the real buffer, not the requested dimensions.
-  m_image.width = m_image.v4l2_fmt.fmt.pix.width;
-  m_image.height = m_image.v4l2_fmt.fmt.pix.height;
-  m_image.set_number_of_pixels();
-  m_image.set_bytes_per_line();
-  m_image.set_size_in_bytes();
+  // Deliberately do NOT resync m_image.width/height/size_in_bytes from the
+  // accepted format. Converter objects (YUYV2RGB, M4202RGB, ...) freeze their
+  // pixel count at construction from the *requested* geometry; shrinking the
+  // ROS destination buffer to the accepted size would let them write past it.
+  // validate_sizeimage() uses pix.width/height directly. The memcpy path is
+  // bounded by min(bytes_used, size_in_bytes) instead.
 
   // Must run before VIDIOC_REQBUFS below: that ioctl is what actually commits
   // the kernel allocation of m_number_of_buffers * sizeimage bytes.
@@ -577,7 +576,7 @@ void UsbCam::init_device()
     throw std::runtime_error(std::string("VIDIOC_G_PARM failed: ") + strerror(errno));
   }
 
-  if (!stream_params.parm.capture.capability && V4L2_CAP_TIMEPERFRAME) {
+  if (!(stream_params.parm.capture.capability & V4L2_CAP_TIMEPERFRAME)) {
     throw std::runtime_error("V4L2_CAP_TIMEPERFRAME not supported");
   }
 

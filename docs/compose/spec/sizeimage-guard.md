@@ -51,7 +51,7 @@ No new classes. Six contracts:
 
 **C4 sizeimage gate.** `expected` is derived from the **device** fourcc bytes/pixel via `usb_cam::utils::device_sizeimage_estimate(fourcc, w, h)`, times `kMaxSizeimageFactor = 4`. Reject implausible `sizeimage` before `VIDIOC_REQBUFS`. `m_max_buffer_bytes` semantics unchanged (accepted sizeimage, or `limit` when the driver reports 0).
 
-**C5 format-state hygiene.** `read_frame()` never writes `m_image.v4l2_fmt`. After `VIDIOC_S_FMT`, re-sync `m_image.width`/`height` and derived `number_of_pixels`/`bytes_per_line`/`size_in_bytes` from the accepted format. `process_image` memcpy is bounded by `min(bytes_used, size_in_bytes)`.
+**C5 format-state hygiene.** `read_frame()` never writes `m_image.v4l2_fmt`. `process_image` memcpy is bounded by `min(bytes_used, size_in_bytes)`. `m_image.width/height/size_in_bytes` stay at construction (requested) values after `S_FMT` — converter objects freeze their pixel count at construction, so shrinking the ROS destination to the accepted geometry would let `YUYV2RGB`/`M4202RGB`/… write past it. `validate_sizeimage()` uses `pix.width/height` directly. A future geometry adopt must first re-sync converter-internal pixel counts.
 
 **C6 msg sizing.** The ROS image buffer resize check uses `m_image_msg->data.size()`, not `sizeof(m_image_msg->data)`.
 
@@ -71,5 +71,5 @@ No new classes. Six contracts:
 - [ ] T4: Fix `available_devices()` fd leak + path-injection args + fd-count regression test — acceptance: fd-count stable across calls; production defaults unchanged (covers: C3)
 - [ ] T5: Replace 9 bare throws with `std::runtime_error`/`std::system_error`; regression test on bad device path — acceptance: `EXPECT_THROW(..., std::exception)` passes; grep for bare throws is empty (covers: C1)
 - [ ] T6: Non-throwing cleanup (`shutdown`/`close_device`/`~UsbCam`); guard `start()` catch — acceptance: no throw escapes a destructor path; error-path test leaves no open fd (covers: C2; depends: T5)
-- [ ] T7: Format hygiene — drop per-frame G_FMT smear; adopt S_FMT geometry; clamp memcpy; `.size()` fix — acceptance: no `VIDIOC_G_FMT` in `read_frame`; `sizeof(vector)` gone; `-Werror` clean (covers: C5, C6; depends: T3)
+- [ ] T7: Format hygiene — drop per-frame G_FMT smear; clamp memcpy by `bytes_used`; keep construction geometry (converters freeze pixel count); `.size()` fix — acceptance: no `VIDIOC_G_FMT` in `read_frame`; `sizeof(vector)` gone; memcpy bounded; `-Werror` clean (covers: C5, C6; depends: T3)
 - [ ] T8: Verify + Review + Finalize — acceptance: `colcon test` green (or `PRE-EXISTING`); reviewer conclusions pass; `status: delivered` with commits range (covers: S1, S2; depends: T3, T4, T6, T7)

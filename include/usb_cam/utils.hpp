@@ -195,19 +195,25 @@ inline std::map<std::string, v4l2_capability> available_devices(
   for (const auto & device_symlink : fs::directory_iterator(v4l2_symlinks_dir)) {
     if (fs::is_symlink(device_symlink)) {
       // device_str is the full path to the device in /sys/devices/*
-      std::string device_str = fs::canonical(
-        v4l2_symlinks_dir + fs::read_symlink(
-          device_symlink).generic_string());
-      // get the proper device name (e.g. /dev/*)
-      std::ifstream uevent_file(device_str + "/uevent");
-      std::string line;
+      // A broken sysfs symlink must not throw out of this probe path.
       std::string device_name;
-      while (std::getline(uevent_file, line)) {
-        auto dev_name_index = line.find("DEVNAME=");
-        if (dev_name_index != std::string::npos) {
-          device_name = dev_prefix + line.substr(dev_name_index + 8, line.size());
-          break;
+      try {
+        std::string device_str = fs::canonical(
+          v4l2_symlinks_dir + fs::read_symlink(
+            device_symlink).generic_string());
+        // get the proper device name (e.g. /dev/*)
+        std::ifstream uevent_file(device_str + "/uevent");
+        std::string line;
+        while (std::getline(uevent_file, line)) {
+          auto dev_name_index = line.find("DEVNAME=");
+          if (dev_name_index != std::string::npos) {
+            device_name = dev_prefix + line.substr(dev_name_index + 8, line.size());
+            break;
+          }
         }
+      } catch (const fs::filesystem_error & e) {
+        std::cerr << "usb_cam: skipping unreadable v4l2 sysfs entry: " << e.what() << std::endl;
+        continue;
       }
       if (device_name.empty()) {
         continue;
