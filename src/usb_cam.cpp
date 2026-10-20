@@ -624,7 +624,8 @@ void UsbCam::open_device()
   struct stat st;
 
   if (-1 == stat(m_device_name.c_str(), &st)) {
-    throw std::runtime_error(std::string("Cannot stat '") + m_device_name + "': " + strerror(errno));
+    throw std::runtime_error(
+            std::string("Cannot stat '") + m_device_name + "': " + strerror(errno));
   }
 
   if (!S_ISCHR(st.st_mode)) {
@@ -634,7 +635,8 @@ void UsbCam::open_device()
   m_fd = open(m_device_name.c_str(), O_RDWR /* required */ | O_NONBLOCK, 0);
 
   if (-1 == m_fd) {
-    throw std::runtime_error(std::string("Cannot open '") + m_device_name + "': " + strerror(errno));
+    throw std::runtime_error(
+            std::string("Cannot open '") + m_device_name + "': " + strerror(errno));
   }
 }
 

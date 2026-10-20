@@ -30,11 +30,12 @@
 #include <libavutil/pixfmt.h>
 
 #include <dirent.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
 #include <filesystem>
 #include <fstream>
 #include <string>
-#include <sys/stat.h>
-#include <unistd.h>
 
 #include "usb_cam/utils.hpp"
 #include "usb_cam/formats/utils.hpp"
@@ -90,31 +91,39 @@ TEST(test_usb_cam_utils, test_monotonic_to_real_time) {
 
 TEST(test_usb_cam_utils, test_device_sizeimage_estimate) {
   // Packed 4:2:2 formats: 2 bytes per device pixel
-  EXPECT_EQ(usb_cam::utils::device_sizeimage_estimate(V4L2_PIX_FMT_YUYV, 640, 480),
+  EXPECT_EQ(
+    usb_cam::utils::device_sizeimage_estimate(V4L2_PIX_FMT_YUYV, 640, 480),
     640u * 480u * 2u);
-  EXPECT_EQ(usb_cam::utils::device_sizeimage_estimate(V4L2_PIX_FMT_UYVY, 640, 480),
+  EXPECT_EQ(
+    usb_cam::utils::device_sizeimage_estimate(V4L2_PIX_FMT_UYVY, 640, 480),
     640u * 480u * 2u);
 
   // MJPEG worst-case bound treated as 2 bytes/pixel
-  EXPECT_EQ(usb_cam::utils::device_sizeimage_estimate(V4L2_PIX_FMT_MJPEG, 1280, 1024),
+  EXPECT_EQ(
+    usb_cam::utils::device_sizeimage_estimate(V4L2_PIX_FMT_MJPEG, 1280, 1024),
     1280u * 1024u * 2u);
 
   // M420: 4:2:0 packed, bounded by 2 bytes/pixel
-  EXPECT_EQ(usb_cam::utils::device_sizeimage_estimate(V4L2_PIX_FMT_M420, 640, 480),
+  EXPECT_EQ(
+    usb_cam::utils::device_sizeimage_estimate(V4L2_PIX_FMT_M420, 640, 480),
     640u * 480u * 2u);
 
   // 8-bit mono / RGB332: 1 byte per device pixel
-  EXPECT_EQ(usb_cam::utils::device_sizeimage_estimate(V4L2_PIX_FMT_GREY, 640, 480),
+  EXPECT_EQ(
+    usb_cam::utils::device_sizeimage_estimate(V4L2_PIX_FMT_GREY, 640, 480),
     640u * 480u * 1u);
-  EXPECT_EQ(usb_cam::utils::device_sizeimage_estimate(V4L2_PIX_FMT_RGB332, 640, 480),
+  EXPECT_EQ(
+    usb_cam::utils::device_sizeimage_estimate(V4L2_PIX_FMT_RGB332, 640, 480),
     640u * 480u * 1u);
 
   // 16-bit mono: 2 bytes per device pixel
-  EXPECT_EQ(usb_cam::utils::device_sizeimage_estimate(V4L2_PIX_FMT_Y16, 640, 480),
+  EXPECT_EQ(
+    usb_cam::utils::device_sizeimage_estimate(V4L2_PIX_FMT_Y16, 640, 480),
     640u * 480u * 2u);
 
   // Packed 10-bit Y10: stored in 2 bytes
-  EXPECT_EQ(usb_cam::utils::device_sizeimage_estimate(V4L2_PIX_FMT_Y10, 640, 480),
+  EXPECT_EQ(
+    usb_cam::utils::device_sizeimage_estimate(V4L2_PIX_FMT_Y10, 640, 480),
     640u * 480u * 2u);
 
   // Zero dimensions
@@ -122,7 +131,8 @@ TEST(test_usb_cam_utils, test_device_sizeimage_estimate) {
   EXPECT_EQ(usb_cam::utils::device_sizeimage_estimate(V4L2_PIX_FMT_YUYV, 640, 0), 0u);
 
   // Unknown fourcc falls back to 4 bytes/pixel (generous ceiling)
-  EXPECT_EQ(usb_cam::utils::device_sizeimage_estimate(0xdeadbeefu, 640, 480),
+  EXPECT_EQ(
+    usb_cam::utils::device_sizeimage_estimate(0xdeadbeefu, 640, 480),
     640u * 480u * 4u);
 }
 
