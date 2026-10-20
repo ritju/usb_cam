@@ -38,6 +38,7 @@ extern "C" {
 #include <fcntl.h>  // for O_* constants and open()
 }
 
+#include <algorithm>
 #include <chrono>
 #include <ctime>
 #include <iostream>
@@ -94,7 +95,10 @@ void UsbCam::process_image(const char * src, char * & dest, const int & bytes_us
   // TODO(flynneva): could we skip the copy here somehow?
   // If no conversion required, just copy the image from V4L2 buffer
   if (m_image.pixel_format->requires_conversion() == false) {
-    memcpy(dest, src, m_image.size_in_bytes);
+    // Never copy past either the dequeued payload or the destination capacity.
+    const size_t src_bytes = bytes_used > 0 ? static_cast<size_t>(bytes_used) : 0;
+    const size_t n = std::min(src_bytes, m_image.size_in_bytes);
+    memcpy(dest, src, n);
   } else {
     m_image.pixel_format->convert(src, dest, bytes_used);
   }
@@ -121,18 +125,8 @@ void UsbCam::read_frame()
     case io_method_t::IO_METHOD_MMAP:
       CLEAR(buf);
       buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-      m_image.v4l2_fmt.type = buf.type;
       buf.memory = V4L2_MEMORY_MMAP;
 
-      // Get current v4l2 pixel format
-      if (-1 == usb_cam::utils::xioctl(m_fd, static_cast<int>(VIDIOC_G_FMT), &m_image.v4l2_fmt)) {
-        switch (errno) {
-          case EAGAIN:
-            return;
-          default:
-            throw std::runtime_error("Invalid v4l2 format");
-        }
-      }
       /// Dequeue buffer with the new image
       if (-1 == usb_cam::utils::xioctl(m_fd, static_cast<int>(VIDIOC_DQBUF), &buf)) {
         switch (errno) {
@@ -206,13 +200,13 @@ void UsbCam::stop_capturing()
     case io_method_t::IO_METHOD_USERPTR:
       type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
       if (-1 == usb_cam::utils::xioctl(m_fd, VIDIOC_STREAMOFF, &type)) {
-        // Set capturing variable to true again, since stream was not stopped successfully
-        m_is_capturing = true;
-        throw std::runtime_error("Unable to stop capturing stream");
+        // Keep capturing=false: the fd is about to be closed or already dead.
+        // Never throw from a cleanup path — shutdown()/~UsbCam call this.
+        std::cerr << "usb_cam: VIDIOC_STREAMOFF failed: " << strerror(errno) << std::endl;
       }
       return;
     case io_method_t::IO_METHOD_UNKNOWN:
-      throw std::invalid_argument("IO method unknown");
+      return;
   }
 }
 
@@ -465,12 +459,11 @@ void UsbCam::validate_sizeimage()
 {
   const struct v4l2_pix_format & pix = m_image.v4l2_fmt.fmt.pix;
 
-  // Derive the expectation from the dimensions the driver actually accepted,
-  // since VIDIOC_S_FMT is free to round width/height, and from the format we
-  // asked for rather than m_image.size_in_bytes, which was computed from the
-  // requested dimensions.
-  const size_t expected = static_cast<size_t>(pix.width) * pix.height *
-    m_image.pixel_format->byte_depth() * m_image.pixel_format->channels();
+  // Derive the expectation from the dimensions the driver actually accepted
+  // (VIDIOC_S_FMT is free to round width/height) and from the *device* fourcc,
+  // not the ROS output bpp: YUYV is 2 B/px even when converting to RGB8.
+  const size_t expected = usb_cam::utils::device_sizeimage_estimate(
+    pix.pixelformat, pix.width, pix.height);
   const size_t limit = expected * kMaxSizeimageFactor;
 
   if (pix.sizeimage > limit) {
@@ -562,8 +555,15 @@ void UsbCam::init_device()
   // Set v4l2 capture format
   // Note VIDIOC_S_FMT may change width and height
   if (-1 == usb_cam::utils::xioctl(m_fd, static_cast<int>(VIDIOC_S_FMT), &m_image.v4l2_fmt)) {
-    throw strerror(errno);
+    throw std::runtime_error(std::string("VIDIOC_S_FMT failed: ") + strerror(errno));
   }
+
+  // Deliberately do NOT resync m_image.width/height/size_in_bytes from the
+  // accepted format. Converter objects (YUYV2RGB, M4202RGB, ...) freeze their
+  // pixel count at construction from the *requested* geometry; shrinking the
+  // ROS destination buffer to the accepted size would let them write past it.
+  // validate_sizeimage() uses pix.width/height directly. The memcpy path is
+  // bounded by min(bytes_used, size_in_bytes) instead.
 
   // Must run before VIDIOC_REQBUFS below: that ioctl is what actually commits
   // the kernel allocation of m_number_of_buffers * sizeimage bytes.
@@ -573,11 +573,11 @@ void UsbCam::init_device()
   memset(&stream_params, 0, sizeof(stream_params));
   stream_params.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
   if (usb_cam::utils::xioctl(m_fd, static_cast<int>(VIDIOC_G_PARM), &stream_params) < 0) {
-    throw strerror(errno);
+    throw std::runtime_error(std::string("VIDIOC_G_PARM failed: ") + strerror(errno));
   }
 
-  if (!stream_params.parm.capture.capability && V4L2_CAP_TIMEPERFRAME) {
-    throw "V4L2_CAP_TIMEPERFRAME not supported";
+  if (!(stream_params.parm.capture.capability & V4L2_CAP_TIMEPERFRAME)) {
+    throw std::runtime_error("V4L2_CAP_TIMEPERFRAME not supported");
   }
 
   // TODO(lucasw) need to get list of valid numerator/denominator pairs
@@ -609,8 +609,10 @@ void UsbCam::close_device()
   // Device is already closed
   if (m_fd == -1) {return;}
 
+  // Teardown must never throw: a destructor or error-unwind path calling
+  // shutdown() would std::terminate on a char* / runtime_error escape.
   if (-1 == close(m_fd)) {
-    throw strerror(errno);
+    std::cerr << "usb_cam: close(" << m_device_name << ") failed: " << strerror(errno) << std::endl;
   }
 
   m_fd = -1;
@@ -621,17 +623,19 @@ void UsbCam::open_device()
   struct stat st;
 
   if (-1 == stat(m_device_name.c_str(), &st)) {
-    throw strerror(errno);
+    throw std::runtime_error(
+            std::string("Cannot stat '") + m_device_name + "': " + strerror(errno));
   }
 
   if (!S_ISCHR(st.st_mode)) {
-    throw strerror(errno);
+    throw std::runtime_error("'" + m_device_name + "' is not a character device");
   }
 
   m_fd = open(m_device_name.c_str(), O_RDWR /* required */ | O_NONBLOCK, 0);
 
   if (-1 == m_fd) {
-    throw strerror(errno);
+    throw std::runtime_error(
+            std::string("Cannot open '") + m_device_name + "': " + strerror(errno));
   }
 }
 
@@ -664,9 +668,29 @@ void UsbCam::start()
 
 void UsbCam::shutdown()
 {
-  stop_capturing();
-  uninit_device();
-  close_device();
+  // Each step is isolated: a failure in one must not skip the others, and
+  // nothing here may throw (destructor and error-unwind call this).
+  try {
+    stop_capturing();
+  } catch (const std::exception & e) {
+    std::cerr << "usb_cam: stop_capturing during shutdown: " << e.what() << std::endl;
+  } catch (...) {
+    std::cerr << "usb_cam: stop_capturing during shutdown: unknown error" << std::endl;
+  }
+  try {
+    uninit_device();
+  } catch (const std::exception & e) {
+    std::cerr << "usb_cam: uninit_device during shutdown: " << e.what() << std::endl;
+  } catch (...) {
+    std::cerr << "usb_cam: uninit_device during shutdown: unknown error" << std::endl;
+  }
+  try {
+    close_device();
+  } catch (const std::exception & e) {
+    std::cerr << "usb_cam: close_device during shutdown: " << e.what() << std::endl;
+  } catch (...) {
+    std::cerr << "usb_cam: close_device during shutdown: unknown error" << std::endl;
+  }
 }
 
 /// @brief Grab new image from V4L2 device, return pointer to image
@@ -764,12 +788,12 @@ void UsbCam::grab_image()
     }
 
     std::cerr << "Something went wrong, exiting..." << errno << std::endl;
-    throw errno;
+    throw std::runtime_error(std::string("select() failed: ") + strerror(errno));
   }
 
   if (0 == r) {
     std::cerr << "Select timeout, exiting..." << std::endl;
-    throw "select timeout";
+    throw std::runtime_error("select timeout");
   }
 
   read_frame();

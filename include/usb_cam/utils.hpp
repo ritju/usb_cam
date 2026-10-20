@@ -142,34 +142,81 @@ inline io_method_t io_method_from_string(const std::string & str)
   }
 }
 
+/// @brief Bytes per pixel the *device* format occupies in a V4L2 buffer.
+/// @details Not the ROS output bpp: YUYV/UYVY are 2 B/px packed, RGB332/GREY
+/// are 1 B/px. MJPEG is compressed so there is no exact product; 2 B/px is the
+/// worst-case uncompressed bound used for the sizeimage sanity limit.
+inline uint32_t device_bytes_per_pixel(uint32_t fourcc)
+{
+  switch (fourcc) {
+    case V4L2_PIX_FMT_YUYV:
+    case V4L2_PIX_FMT_UYVY:
+    case V4L2_PIX_FMT_MJPEG:
+    case V4L2_PIX_FMT_M420:
+    case V4L2_PIX_FMT_Y16:
+    case V4L2_PIX_FMT_Y10:
+      return 2;
+    case V4L2_PIX_FMT_GREY:
+    case V4L2_PIX_FMT_RGB332:
+      return 1;
+    default:
+      // Generous ceiling so an unrecognized fourcc still gets a finite bound.
+      return 4;
+  }
+}
+
+/// @brief Expected device-side frame size for a given fourcc and geometry.
+inline size_t device_sizeimage_estimate(uint32_t fourcc, uint32_t width, uint32_t height)
+{
+  return static_cast<size_t>(width) * height * device_bytes_per_pixel(fourcc);
+}
+
 /// \brief List currently available valid V4L2 devices
 ///   Can be used to check if a device string is valid before
 ///   starting up.
 ///
 ///   Inspired by: http://stackoverflow.com/questions/4290834/how-to-get-a-list-of-video-capture-devices-web-cameras-on-linux-ubuntu-c
-inline std::map<std::string, v4l2_capability> available_devices()
+///
+///   Every fd opened here is closed before return. A leaked probe fd is a
+///   second handle on a live UVC device and can corrupt the kernel format
+///   state (gigabyte sizeimage) when the real capture fd is already streaming.
+inline std::map<std::string, v4l2_capability> available_devices(
+  const std::string & v4l2_symlinks_dir = "/sys/class/video4linux/",
+  const std::string & dev_prefix = "/dev/")
 {
   // Initialize vector of device strings to fill in
   std::map<std::string, v4l2_capability> v4l2_devices;
 
   // Get a list of all v4l2 devices from /sys/class/video4linux
-  const std::string v4l2_symlinks_dir = "/sys/class/video4linux/";
+  std::error_code ec;
+  if (!fs::is_directory(v4l2_symlinks_dir, ec)) {
+    return v4l2_devices;
+  }
   for (const auto & device_symlink : fs::directory_iterator(v4l2_symlinks_dir)) {
     if (fs::is_symlink(device_symlink)) {
       // device_str is the full path to the device in /sys/devices/*
-      std::string device_str = fs::canonical(
-        v4l2_symlinks_dir + fs::read_symlink(
-          device_symlink).generic_string());
-      // get the proper device name (e.g. /dev/*)
-      std::ifstream uevent_file(device_str + "/uevent");
-      std::string line;
+      // A broken sysfs symlink must not throw out of this probe path.
       std::string device_name;
-      while (std::getline(uevent_file, line)) {
-        auto dev_name_index = line.find("DEVNAME=");
-        if (dev_name_index != std::string::npos) {
-          device_name = "/dev/" + line.substr(dev_name_index + 8, line.size());
-          break;
+      try {
+        std::string device_str = fs::canonical(
+          v4l2_symlinks_dir + fs::read_symlink(
+            device_symlink).generic_string());
+        // get the proper device name (e.g. /dev/*)
+        std::ifstream uevent_file(device_str + "/uevent");
+        std::string line;
+        while (std::getline(uevent_file, line)) {
+          auto dev_name_index = line.find("DEVNAME=");
+          if (dev_name_index != std::string::npos) {
+            device_name = dev_prefix + line.substr(dev_name_index + 8, line.size());
+            break;
+          }
         }
+      } catch (const fs::filesystem_error & e) {
+        std::cerr << "usb_cam: skipping unreadable v4l2 sysfs entry: " << e.what() << std::endl;
+        continue;
+      }
+      if (device_name.empty()) {
+        continue;
       }
 
       int fd;
@@ -185,6 +232,7 @@ inline std::map<std::string, v4l2_capability> available_devices()
         } else {
           v4l2_devices[device_name] = device_capabilities;
         }
+        close(fd);
       }
     } else {
       // device doesn't exist, continue
