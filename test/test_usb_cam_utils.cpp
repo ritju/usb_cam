@@ -29,10 +29,16 @@
 #include <gtest/gtest.h>
 #include <libavutil/pixfmt.h>
 
+#include <dirent.h>
+#include <filesystem>
+#include <fstream>
 #include <string>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include "usb_cam/utils.hpp"
 #include "usb_cam/formats/utils.hpp"
+#include "usb_cam/usb_cam.hpp"
 
 
 using usb_cam::utils::io_method_from_string;
@@ -80,4 +86,134 @@ TEST(test_usb_cam_utils, test_monotonic_to_real_time) {
   const time_t test_time_t = usb_cam::utils::get_epoch_time_shift_us();
 
   EXPECT_NE(test_time_t, 0);
+}
+
+TEST(test_usb_cam_utils, test_device_sizeimage_estimate) {
+  // Packed 4:2:2 formats: 2 bytes per device pixel
+  EXPECT_EQ(usb_cam::utils::device_sizeimage_estimate(V4L2_PIX_FMT_YUYV, 640, 480),
+    640u * 480u * 2u);
+  EXPECT_EQ(usb_cam::utils::device_sizeimage_estimate(V4L2_PIX_FMT_UYVY, 640, 480),
+    640u * 480u * 2u);
+
+  // MJPEG worst-case bound treated as 2 bytes/pixel
+  EXPECT_EQ(usb_cam::utils::device_sizeimage_estimate(V4L2_PIX_FMT_MJPEG, 1280, 1024),
+    1280u * 1024u * 2u);
+
+  // M420: 4:2:0 packed, bounded by 2 bytes/pixel
+  EXPECT_EQ(usb_cam::utils::device_sizeimage_estimate(V4L2_PIX_FMT_M420, 640, 480),
+    640u * 480u * 2u);
+
+  // 8-bit mono / RGB332: 1 byte per device pixel
+  EXPECT_EQ(usb_cam::utils::device_sizeimage_estimate(V4L2_PIX_FMT_GREY, 640, 480),
+    640u * 480u * 1u);
+  EXPECT_EQ(usb_cam::utils::device_sizeimage_estimate(V4L2_PIX_FMT_RGB332, 640, 480),
+    640u * 480u * 1u);
+
+  // 16-bit mono: 2 bytes per device pixel
+  EXPECT_EQ(usb_cam::utils::device_sizeimage_estimate(V4L2_PIX_FMT_Y16, 640, 480),
+    640u * 480u * 2u);
+
+  // Packed 10-bit Y10: stored in 2 bytes
+  EXPECT_EQ(usb_cam::utils::device_sizeimage_estimate(V4L2_PIX_FMT_Y10, 640, 480),
+    640u * 480u * 2u);
+
+  // Zero dimensions
+  EXPECT_EQ(usb_cam::utils::device_sizeimage_estimate(V4L2_PIX_FMT_YUYV, 0, 480), 0u);
+  EXPECT_EQ(usb_cam::utils::device_sizeimage_estimate(V4L2_PIX_FMT_YUYV, 640, 0), 0u);
+
+  // Unknown fourcc falls back to 4 bytes/pixel (generous ceiling)
+  EXPECT_EQ(usb_cam::utils::device_sizeimage_estimate(0xdeadbeefu, 640, 480),
+    640u * 480u * 4u);
+}
+
+namespace
+{
+
+int count_open_fds()
+{
+  DIR * dir = opendir("/proc/self/fd");
+  if (dir == nullptr) {
+    return -1;
+  }
+  int count = 0;
+  while (readdir(dir) != nullptr) {
+    ++count;
+  }
+  closedir(dir);
+  // readdir also yields "." and ".."
+  return count - 2;
+}
+
+}  // namespace
+
+TEST(test_usb_cam_utils, test_available_devices_closes_probe_fds) {
+  // Fake sysfs + dev tree so the probe opens a regular file and must close it.
+  const std::string root = "/tmp/usb_cam_fd_leak_test";
+  const std::string sysfs = root + "/sys/";
+  const std::string device_dir = root + "/devices/fake0/";
+  const std::string dev_prefix = root + "/dev/";
+
+  std::filesystem::remove_all(root);
+  std::filesystem::create_directories(sysfs);
+  std::filesystem::create_directories(device_dir);
+  std::filesystem::create_directories(dev_prefix);
+
+  {
+    std::ofstream uevent(device_dir + "uevent");
+    uevent << "DEVNAME=fakevid0\n";
+  }
+  {
+    std::ofstream dev(dev_prefix + "fakevid0");
+    dev << "x";
+  }
+  std::filesystem::create_directory_symlink(
+    std::filesystem::path("../devices/fake0"), std::filesystem::path(sysfs + "video0"));
+
+  const int before = count_open_fds();
+  ASSERT_GT(before, 0);
+
+  // Run several times; a leak grows the count by one open per device per call.
+  for (int i = 0; i < 5; ++i) {
+    auto devices = usb_cam::utils::available_devices(sysfs, dev_prefix);
+    (void)devices;  // fake file is not a V4L2 node; QUERYCAP fails, fd must still close
+    const int after = count_open_fds();
+    EXPECT_EQ(after, before) << "available_devices leaked an fd on iteration " << i;
+  }
+
+  std::filesystem::remove_all(root);
+}
+
+TEST(test_usb_cam_utils, test_configure_throws_std_exception_on_bad_device) {
+  // Regression for H4: bare `throw strerror(errno)` (char*) escaped
+  // `catch (const std::exception&)` in the node, skipping shutdown().
+  usb_cam::UsbCam cam;
+  usb_cam::parameters_t params;
+  params.device_name = "/dev/usb_cam_definitely_missing_device";
+  params.pixel_format_name = "yuyv2rgb";
+  params.image_width = 640;
+  params.image_height = 480;
+
+  bool caught_std_exception = false;
+  try {
+    cam.configure(params, usb_cam::utils::IO_METHOD_MMAP);
+  } catch (const std::exception & e) {
+    caught_std_exception = true;
+    EXPECT_NE(std::string(e.what()).size(), 0u);
+  } catch (...) {
+    FAIL() << "configure threw a non-std::exception type";
+  }
+  EXPECT_TRUE(caught_std_exception);
+
+  // A non-character path must also throw std::exception, not char*.
+  usb_cam::UsbCam cam2;
+  params.device_name = "/tmp";
+  caught_std_exception = false;
+  try {
+    cam2.configure(params, usb_cam::utils::IO_METHOD_MMAP);
+  } catch (const std::exception & e) {
+    caught_std_exception = true;
+  } catch (...) {
+    FAIL() << "configure threw a non-std::exception type for a non-char path";
+  }
+  EXPECT_TRUE(caught_std_exception);
 }

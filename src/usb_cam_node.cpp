@@ -227,8 +227,21 @@ void UsbCamNode::init()
     }
     catch (...)
     {
-      // usb_cam throws a bare `char *` from some error paths, which is not a
-      // std::exception; teardown must never abort the node.
+      // teardown must never abort the node.
+      RCLCPP_WARN(this->get_logger(), "Camera teardown also failed while handling configure error");
+    }
+    rclcpp::shutdown();
+    return;
+  }
+  catch (...)
+  {
+    RCLCPP_ERROR(this->get_logger(), "Failed to configure camera: unknown error");
+    try
+    {
+      m_camera->shutdown();
+    }
+    catch (...)
+    {
       RCLCPP_WARN(this->get_logger(), "Camera teardown also failed while handling configure error");
     }
     rclcpp::shutdown();
@@ -250,7 +263,29 @@ void UsbCamNode::init()
   {
     RCLCPP_ERROR(this->get_logger(), "Failed to start camera stream: %s", e.what());
     RCLCPP_ERROR(this->get_logger(), "Check dmesg for USB/UVC errors");
-    m_camera->shutdown();
+    try
+    {
+      m_camera->shutdown();
+    }
+    catch (...)
+    {
+      RCLCPP_WARN(this->get_logger(), "Camera teardown also failed while handling start error");
+    }
+    rclcpp::shutdown();
+    return;
+  }
+  catch (...)
+  {
+    RCLCPP_ERROR(this->get_logger(), "Failed to start camera stream: unknown error");
+    RCLCPP_ERROR(this->get_logger(), "Check dmesg for USB/UVC errors");
+    try
+    {
+      m_camera->shutdown();
+    }
+    catch (...)
+    {
+      RCLCPP_WARN(this->get_logger(), "Camera teardown also failed while handling start error");
+    }
     rclcpp::shutdown();
     return;
   }
@@ -603,7 +638,7 @@ cv::Mat UsbCamNode::gpuUndistort(cv::Mat& img, cv::Mat map1, cv::Mat map2)
 bool UsbCamNode::take_and_send_image()
 {
   // Only resize if required
-  if (sizeof(m_image_msg->data) != m_camera->get_image_size_in_bytes())
+  if (m_image_msg->data.size() != m_camera->get_image_size_in_bytes())
   {
     m_image_msg->width = m_camera->get_image_width();
     m_image_msg->height = m_camera->get_image_height();
