@@ -345,3 +345,12 @@ TEST(test_usb_cam_utils, test_ros_log_dir_default) {
   EXPECT_FALSE(d.empty());
   EXPECT_NE(d.find("/.ros/log"), std::string::npos);
 }
+
+TEST(test_usb_cam_utils, test_install_crash_handlers_caches_full_path) {
+  usb_cam::utils::install_crash_handlers();
+  const std::string cached = usb_cam::utils::crash_log_dir_storage();
+  // Regression: sizeof(char*) once truncated this to 7 bytes ("/home/s").
+  EXPECT_GT(cached.size(), 16u);
+  EXPECT_EQ(cached, usb_cam::utils::ros_log_dir());
+  EXPECT_NE(cached.find("/.ros/log"), std::string::npos);
+}

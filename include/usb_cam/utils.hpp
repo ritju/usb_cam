@@ -256,14 +256,32 @@ inline std::string ros_log_dir()
 }
 
 /// @brief Snapshot /proc/self/maps so a later `(deleted)` mapping can be identified.
+/// Uses open/read/write only — callable from a signal handler without iostream locks.
 inline void copy_proc_maps(const std::string & dest_path)
 {
-  std::ifstream in("/proc/self/maps");
-  std::ofstream out(dest_path, std::ios::trunc);
-  if (!in || !out) {
+  const int in = open("/proc/self/maps", O_RDONLY);
+  if (in < 0) {
     return;
   }
-  out << in.rdbuf();
+  const int out = open(dest_path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+  if (out < 0) {
+    close(in);
+    return;
+  }
+  char buf[4096];
+  ssize_t n;
+  while ((n = read(in, buf, sizeof(buf))) > 0) {
+    ssize_t off = 0;
+    while (off < n) {
+      const ssize_t w = write(out, buf + off, static_cast<size_t>(n - off));
+      if (w <= 0) {
+        break;
+      }
+      off += w;
+    }
+  }
+  close(out);
+  close(in);
 }
 
 /// @brief Write a one-line last-gasp record. Uses only async-signal-safe syscalls
@@ -306,6 +324,10 @@ inline char * crash_log_dir_storage()
   return dir;
 }
 
+/// Length of crash_log_dir_storage()'s buffer. sizeof on the returned char*
+/// would be pointer width, not the buffer — use this constant instead.
+constexpr size_t kCrashLogDirLen = 512;
+
 inline void crash_signal_handler(int sig)
 {
   write_last_gasp(crash_log_dir_storage(), sig);
@@ -319,8 +341,8 @@ inline void install_crash_handlers()
 {
   char * dir = crash_log_dir_storage();
   const std::string d = ros_log_dir();
-  std::strncpy(dir, d.c_str(), sizeof(crash_log_dir_storage()) - 1);
-  dir[sizeof(crash_log_dir_storage()) - 1] = '\0';
+  std::strncpy(dir, d.c_str(), kCrashLogDirLen - 1);
+  dir[kCrashLogDirLen - 1] = '\0';
 
   copy_proc_maps(d + "/usb_cam_maps_at_start.txt");
 

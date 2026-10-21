@@ -132,7 +132,7 @@ void UsbCam::note_dropped_frame(const std::string & err)
   ++m_dropped_frames;
   // Per-frame WARN_THROTTLE hides bursts; summarize every N drops at ERROR.
   constexpr uint64_t kDropSummaryEvery = 30;
-  if (m_dropped_frames % kDropSummaryEvery == 1 || m_dropped_frames % kDropSummaryEvery == 0) {
+  if (m_dropped_frames % kDropSummaryEvery == 0 || m_dropped_frames == 1) {
     log(
       log_level_t::ERROR,
       "usb_cam: dropped " + std::to_string(m_dropped_frames) + " frames, last reason: " + err);

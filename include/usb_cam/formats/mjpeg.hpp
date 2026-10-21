@@ -218,8 +218,9 @@ public:
       return;
     }
 
-    // clear the picture
-    memset(dest, 0, m_avframe_rgb_size);
+    // clear the picture — dest is a tightly packed RGB8 ROS buffer
+    // (width*3*height), NOT the row-padded av_image_get_buffer_size value.
+    std::memset(dest, 0, static_cast<size_t>(m_avframe_rgb->width) * m_avframe_rgb->height * 3);
 
     auto avpacket = av_packet_alloc();
     if (!avpacket) {

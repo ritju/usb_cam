@@ -61,7 +61,8 @@ UsbCamNode::UsbCamNode(const rclcpp::NodeOptions& node_options)
   // Diagnostic switch: USB_CAM_UNBUFFERED_LOG=1 makes every ROS log line hit
   // the file immediately so OOM-kill cannot swallow the tail. Default off.
   if (const char * unbuf = std::getenv("USB_CAM_UNBUFFERED_LOG");
-    unbuf != nullptr && (unbuf[0] == '1' || unbuf[0] == 't' || unbuf[0] == 'T' || unbuf[0] == 'y'))
+    unbuf != nullptr && unbuf[0] != '\0' &&
+    !(unbuf[0] == '0' || unbuf[0] == 'f' || unbuf[0] == 'F' || unbuf[0] == 'n' || unbuf[0] == 'N'))
   {
     setenv("RCUTILS_LOGGING_BUFFERED_STREAM", "0", 1);
     RCLCPP_WARN(this->get_logger(),

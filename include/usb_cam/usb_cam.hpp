@@ -486,8 +486,8 @@ private:
   std::shared_ptr<usb_cam::utils::buffer[]> m_buffers;
   image_t m_image;
   log_fn_t m_logger;
-  /// Cumulative dropped frames; every kDropSummaryEvery we emit an ERROR summary
-  /// so bursts are visible despite per-frame THROTTLE.
+  /// Cumulative dropped frames; every kDropSummaryEvery (and the first drop)
+  /// we emit an ERROR summary so bursts are visible despite per-frame THROTTLE.
   uint64_t m_dropped_frames = 0;
 
   AVFrame * m_avframe;
