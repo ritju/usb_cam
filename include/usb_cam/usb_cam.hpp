@@ -65,7 +65,11 @@ using usb_cam::formats::pixel_format_base;
 
 /// @brief Severity for the UsbCam log sink. Kept independent of rclcpp so the
 /// usb_cam library stays free of a ROS dependency.
-enum class log_level_t {DEBUG, INFO, WARN, ERROR};
+/// THROTTLE variants map to RCLCPP_*_THROTTLE (see UsbCamNode logger bridge).
+enum class log_level_t {DEBUG, DEBUG_THROTTLE, INFO, INFO_THROTTLE, WARN, WARN_THROTTLE, ERROR};
+
+/// Default throttle window for *_THROTTLE levels, in milliseconds.
+constexpr int kLogThrottleMs = 5000;
 
 using log_fn_t = std::function<void (log_level_t, const std::string &)>;
 

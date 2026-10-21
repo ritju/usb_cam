@@ -144,15 +144,29 @@ void UsbCamNode::init()
   // Route UsbCam library logs into the node logger before any device work.
   m_camera->set_logger(
     [this](usb_cam::log_level_t level, const std::string & msg) {
+      // RCLCPP_*_THROTTLE needs a clock and a period in milliseconds.
+      const auto throttle_ms = usb_cam::kLogThrottleMs;
       switch (level) {
         case usb_cam::log_level_t::DEBUG:
           RCLCPP_DEBUG(this->get_logger(), "%s", msg.c_str());
           break;
+        case usb_cam::log_level_t::DEBUG_THROTTLE:
+          RCLCPP_DEBUG_THROTTLE(
+            this->get_logger(), *this->get_clock(), throttle_ms, "%s", msg.c_str());
+          break;
         case usb_cam::log_level_t::INFO:
           RCLCPP_INFO(this->get_logger(), "%s", msg.c_str());
           break;
+        case usb_cam::log_level_t::INFO_THROTTLE:
+          RCLCPP_INFO_THROTTLE(
+            this->get_logger(), *this->get_clock(), throttle_ms, "%s", msg.c_str());
+          break;
         case usb_cam::log_level_t::WARN:
           RCLCPP_WARN(this->get_logger(), "%s", msg.c_str());
+          break;
+        case usb_cam::log_level_t::WARN_THROTTLE:
+          RCLCPP_WARN_THROTTLE(
+            this->get_logger(), *this->get_clock(), throttle_ms, "%s", msg.c_str());
           break;
         case usb_cam::log_level_t::ERROR:
           RCLCPP_ERROR(this->get_logger(), "%s", msg.c_str());

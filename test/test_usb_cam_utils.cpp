@@ -252,6 +252,23 @@ TEST(test_usb_cam_utils, test_frame_payload_error) {
   EXPECT_EQ(usb_cam::frame_payload_error(0, 4, 5000, 8000, 0, 0), "");
 }
 
+TEST(test_usb_cam_utils, test_throttle_log_levels) {
+  // The node bridge maps *_THROTTLE to RCLCPP_*_THROTTLE with this window.
+  EXPECT_EQ(usb_cam::kLogThrottleMs, 5000);
+
+  // Throttle variants must be distinct from their plain counterparts so the
+  // node switch cannot silently collapse them.
+  EXPECT_NE(
+    static_cast<int>(usb_cam::log_level_t::DEBUG_THROTTLE),
+    static_cast<int>(usb_cam::log_level_t::DEBUG));
+  EXPECT_NE(
+    static_cast<int>(usb_cam::log_level_t::INFO_THROTTLE),
+    static_cast<int>(usb_cam::log_level_t::INFO));
+  EXPECT_NE(
+    static_cast<int>(usb_cam::log_level_t::WARN_THROTTLE),
+    static_cast<int>(usb_cam::log_level_t::WARN));
+}
+
 TEST(test_usb_cam_utils, test_set_logger_routes_messages) {
   usb_cam::UsbCam cam;
   std::vector<std::pair<usb_cam::log_level_t, std::string>> captured;
