@@ -120,8 +120,10 @@ def generate_launch_description():
             namespace=camera.namespace,
             parameters=[camera.param_path],
             remappings=camera.remappings,
-            respawn=True,
-            respawn_delay=10,
+            # Respawn is deliberately off: rgb_camera_manager owns this node's
+            # lifetime; a respawn timer races the manager's SIGINT/SIGKILL and
+            # collides with SHUTDOWN_TIMEOUT (10s vs respawn_delay 10s).
+            respawn=False,
         )
         for camera in CAMERAS
     ]
