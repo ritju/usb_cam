@@ -90,12 +90,16 @@ void UsbCam::log(log_level_t level, const std::string & msg) const
     return;
   }
   // Default sink keeps the library usable without a host logger.
+  // THROTTLE levels degrade to their plain counterpart here — no timer.
   switch (level) {
     case log_level_t::DEBUG:
+    case log_level_t::DEBUG_THROTTLE:
     case log_level_t::INFO:
+    case log_level_t::INFO_THROTTLE:
       std::cout << msg << std::endl;
       break;
     case log_level_t::WARN:
+    case log_level_t::WARN_THROTTLE:
     case log_level_t::ERROR:
       std::cerr << msg << std::endl;
       break;
@@ -146,7 +150,7 @@ void UsbCam::read_frame()
           static_cast<uint32_t>(len), m_buffers[0].length,
           /* flags */ 0, m_max_buffer_bytes);
         if (!err.empty()) {
-          log(log_level_t::WARN, "usb_cam: dropping read frame: " + err);
+          log(log_level_t::WARN_THROTTLE, "usb_cam: dropping read frame: " + err);
           return;
         }
       }
@@ -171,7 +175,7 @@ void UsbCam::read_frame()
           buf.index, m_number_of_buffers,
           buf.bytesused, buf.length, buf.flags, m_max_buffer_bytes);
         if (!err.empty()) {
-          log(log_level_t::WARN, "usb_cam: dropping mmap frame: " + err);
+          log(log_level_t::WARN_THROTTLE, "usb_cam: dropping mmap frame: " + err);
           // Requeue so the stream keeps draining; one bad buffer must not stall.
           if (-1 == usb_cam::utils::xioctl(m_fd, static_cast<int>(VIDIOC_QBUF), &buf)) {
             log(log_level_t::ERROR, "usb_cam: QBUF failed while dropping a bad frame");
@@ -210,7 +214,7 @@ void UsbCam::read_frame()
           buf.index, m_number_of_buffers,
           buf.bytesused, buf.length, buf.flags, m_max_buffer_bytes);
         if (!err.empty()) {
-          log(log_level_t::WARN, "usb_cam: dropping userptr frame: " + err);
+          log(log_level_t::WARN_THROTTLE, "usb_cam: dropping userptr frame: " + err);
           if (-1 == usb_cam::utils::xioctl(m_fd, static_cast<int>(VIDIOC_QBUF), &buf)) {
             log(log_level_t::ERROR, "usb_cam: QBUF failed while dropping a bad frame");
           }
