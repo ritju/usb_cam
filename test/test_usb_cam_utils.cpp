@@ -227,3 +227,64 @@ TEST(test_usb_cam_utils, test_configure_throws_std_exception_on_bad_device) {
   }
   EXPECT_TRUE(caught_std_exception);
 }
+
+TEST(test_usb_cam_utils, test_frame_payload_error) {
+  // Happy path
+  EXPECT_EQ(usb_cam::frame_payload_error(0, 4, 1024, 2048, 0, 4096), "");
+
+  // Index out of range
+  EXPECT_NE(usb_cam::frame_payload_error(4, 4, 1024, 2048, 0, 4096), "");
+
+  // Driver error flag
+  EXPECT_NE(
+    usb_cam::frame_payload_error(0, 4, 1024, 2048, V4L2_BUF_FLAG_ERROR, 4096), "");
+
+  // Empty payload
+  EXPECT_NE(usb_cam::frame_payload_error(0, 4, 0, 2048, 0, 4096), "");
+
+  // bytesused > length
+  EXPECT_NE(usb_cam::frame_payload_error(0, 4, 3000, 2048, 0, 4096), "");
+
+  // bytesused > accepted bound
+  EXPECT_NE(usb_cam::frame_payload_error(0, 4, 5000, 8000, 0, 4096), "");
+
+  // max_buffer_bytes == 0 disables that particular bound
+  EXPECT_EQ(usb_cam::frame_payload_error(0, 4, 5000, 8000, 0, 0), "");
+}
+
+TEST(test_usb_cam_utils, test_set_logger_routes_messages) {
+  usb_cam::UsbCam cam;
+  std::vector<std::pair<usb_cam::log_level_t, std::string>> captured;
+  cam.set_logger(
+    [&captured](usb_cam::log_level_t level, const std::string & msg) {
+      captured.emplace_back(level, msg);
+    });
+
+  // set_pixel_format on an unknown format logs the supported list, then throws.
+  usb_cam::parameters_t params;
+  params.pixel_format_name = "not_a_real_format";
+  params.device_name = "/dev/null";
+  try {
+    cam.configure(params, usb_cam::utils::IO_METHOD_MMAP);
+  } catch (const std::exception &) {
+  }
+
+  ASSERT_FALSE(captured.empty());
+  bool saw_error = false;
+  for (const auto & entry : captured) {
+    EXPECT_FALSE(entry.second.empty());
+    if (entry.first == usb_cam::log_level_t::ERROR) {
+      saw_error = true;
+    }
+  }
+  EXPECT_TRUE(saw_error);
+
+  // Without a logger, logging must not crash.
+  usb_cam::UsbCam bare;
+  bare.set_logger(nullptr);
+  // configure will fail on the device path; just ensure no terminate.
+  try {
+    bare.configure(params, usb_cam::utils::IO_METHOD_MMAP);
+  } catch (const std::exception &) {
+  }
+}
