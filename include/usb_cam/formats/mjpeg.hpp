@@ -269,11 +269,15 @@ public:
       m_avframe_device->linesize, 0, m_avframe_device->height,
       m_avframe_rgb->data, m_avframe_rgb->linesize);
 
+    // dest is a tightly packed ROS RGB8 buffer. av_image_copy_to_buffer with
+    // align=32 writes row-padded lines and overflows whenever width*3 % 32 != 0.
+    const int packed_rgb =
+      m_avframe_rgb->width * m_avframe_rgb->height * 3;
     av_image_copy_to_buffer(
       const_cast<uint8_t *>(reinterpret_cast<const uint8_t *>(dest)),
-      m_avframe_rgb_size, m_avframe_rgb->data,
+      packed_rgb, m_avframe_rgb->data,
       m_avframe_rgb->linesize, (AVPixelFormat)m_avframe_rgb->format,
-      m_avframe_rgb->width, m_avframe_rgb->height, m_align);
+      m_avframe_rgb->width, m_avframe_rgb->height, 1 /* align: packed */);
   }
 
 private:
