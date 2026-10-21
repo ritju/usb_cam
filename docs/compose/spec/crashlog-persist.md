@@ -1,14 +1,29 @@
 ---
 feature: crashlog-persist
-status: designed
+status: delivered
 updated: 2026-10-19
 branch: feature/crashlog-persist
-commits: 
+commits: ddca4e5..4c5af47
 ---
 
 # crashlog-persist
 
 ## Report
+
+**What was built** — Crash/exit logs now reach disk, and the MJPEG path no longer NULL-derefs under memory pressure. `install_crash_handlers()` snapshots `/proc/self/maps` at start and writes `usb_cam_last_gasp.log` + `usb_cam_maps_at_crash.txt` into `~/.ros/log` on SIGSEGV/ABRT/BUS/FPE/ILL (so a `(deleted)` mapping can be identified later). `atexit` and the node destructor flush stdio. Diagnostic switch `USB_CAM_UNBUFFERED_LOG=1` (launch `SetEnvironmentVariable` + node `setenv`) sets `RCUTILS_LOGGING_BUFFERED_STREAM=0` so every line hits the file before an OOM-kill — default **off**. MJPEG `convert()`/ctor check every FFmpeg alloc and never `memcpy`/`sws_scale`/`av_image_copy_to_buffer` through NULL or past a tightly packed ROS buffer. Also: timer-first destructor order, null-safe compressed publishers and `parameters_callback`, and a periodic dropped-frame ERROR summary.
+
+**Verification** —
+- `colcon build --packages-select usb_cam` — **PASS**
+- `ctest -R 'test_usb_cam_utils|test_pixel_formats'` — **PASS** (incl. `test_last_gasp_and_maps_snapshot`, `test_ros_log_dir_default`, `test_install_crash_handlers_caches_full_path`)
+- `ament_uncrustify` / `ament_cpplint` on touched files — **PASS** (`usb_cam_node.cpp` Allman style is PRE-EXISTING)
+- Reviewer #1: D1/D3/D4 accept; 2 CRITICAL (sizeof(char*) path truncation, padded memset) → fixed; re-review: C1 resolved, C2 residual at `av_image_copy_to_buffer` → fixed with `align=1` + packed `dst_size`. No further criticals.
+
+**Journey log** —
+1. `sizeof(fn())` where `fn` returns `char*` is pointer width (8), not the buffer. That silently truncated the cached crash dir to `"/home/s"` — the unit test called `write_last_gasp(dir)` directly and never exercised `install_crash_handlers`. Always name the buffer length constant.
+2. FFmpeg `av_image_get_buffer_size(..., align=N)` and `av_image_copy_to_buffer(..., align=N)` are row-padded. A ROS `sensor_msgs::Image` is tightly packed `w*3*h`. Use `align=1` for the copy, never `memset` with the padded size.
+3. Signal handlers cannot use iostream (locks/malloc). `copy_proc_maps` now uses `open`/`read`/`write`.
+4. Unbuffered ROS logs (`RCUTILS_LOGGING_BUFFERED_STREAM=0`) are the only thing that survives OOM-kill; signal handlers do not run on SIGKILL. Keep the switch diagnostic-only (IO amplification).
+5. Residual: `fflush(nullptr)` does not flush rcutils' internal buffers; unbuffered mode is the reliable path. `m_avframe_rgb_size` (align=32) is still used for the internal FFmpeg frame, which is correct.
 
 ## [S1] Problem
 
@@ -55,9 +70,9 @@ Field: before OOM, kernel shows `usb_cam_node_ex[pid]: segfault at 0 ... error 4
 
 ## Tasks
 
-- [ ] T1: Spec — acceptance: file with H1–H4 + D1–D4 (covers: S1, S2, S3)
-- [ ] T2: H1/H2 FFmpeg alloc checks in `mjpeg.hpp` — acceptance: every alloc failure path returns/throws; no memcpy/sws_scale on NULL (covers: D3)
-- [ ] T3: H3/H4 null guards in `usb_cam_node.cpp` — acceptance: callback safe without timer; compressed path safe without pubs (covers: D3)
-- [ ] T4: atexit + signal last-gasp + maps snapshot — acceptance: after a forced abort, `~/.ros/log` has last_gasp + maps; helper unit-testable (covers: D2, D4)
-- [ ] T5: `USB_CAM_UNBUFFERED_LOG` switch in launch — acceptance: default off; on → `RCUTILS_LOGGING_BUFFERED_STREAM=0` set before node start (covers: D1)
-- [ ] T6: Verify + Review + Finalize — acceptance: gtests green/PRE-EXISTING; review pass; `delivered` (covers: all; depends: T2–T5)
+- [x] T1: Spec — acceptance: file with H1–H4 + D1–D4 (covers: S1, S2, S3)
+- [x] T2: H1/H2 FFmpeg alloc checks in `mjpeg.hpp` — acceptance: every alloc failure path returns/throws; no memcpy/sws_scale on NULL (covers: D3)
+- [x] T3: H3/H4 null guards in `usb_cam_node.cpp` — acceptance: callback safe without timer; compressed path safe without pubs (covers: D3)
+- [x] T4: atexit + signal last-gasp + maps snapshot — acceptance: after a forced abort, `~/.ros/log` has last_gasp + maps; helper unit-testable (covers: D2, D4)
+- [x] T5: `USB_CAM_UNBUFFERED_LOG` switch in launch — acceptance: default off; on → `RCUTILS_LOGGING_BUFFERED_STREAM=0` set before node start (covers: D1)
+- [x] T6: Verify + Review + Finalize — acceptance: gtests green/PRE-EXISTING; review pass; `delivered` (covers: all; depends: T2–T5)
