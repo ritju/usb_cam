@@ -460,6 +460,7 @@ public:
 
 private:
   void log(log_level_t level, const std::string & msg) const;
+  void note_dropped_frame(const std::string & err);
 
   void init_read();
   void init_mmap();
@@ -485,6 +486,9 @@ private:
   std::shared_ptr<usb_cam::utils::buffer[]> m_buffers;
   image_t m_image;
   log_fn_t m_logger;
+  /// Cumulative dropped frames; every kDropSummaryEvery (and the first drop)
+  /// we emit an ERROR summary so bursts are visible despite per-frame THROTTLE.
+  uint64_t m_dropped_frames = 0;
 
   AVFrame * m_avframe;
   AVCodec * m_avcodec;

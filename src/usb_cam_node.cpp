@@ -26,6 +26,7 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
+#include <cstdlib>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -57,6 +58,22 @@ UsbCamNode::UsbCamNode(const rclcpp::NodeOptions& node_options)
         "set_capture", std::bind(&UsbCamNode::service_capture, this, std::placeholders::_1, std::placeholders::_2,
                                  std::placeholders::_3)))
 {
+  // Diagnostic switch: USB_CAM_UNBUFFERED_LOG=1 makes every ROS log line hit
+  // the file immediately so OOM-kill cannot swallow the tail. Default off.
+  if (const char * unbuf = std::getenv("USB_CAM_UNBUFFERED_LOG");
+    unbuf != nullptr && unbuf[0] != '\0' &&
+    !(unbuf[0] == '0' || unbuf[0] == 'f' || unbuf[0] == 'F' || unbuf[0] == 'n' || unbuf[0] == 'N'))
+  {
+    setenv("RCUTILS_LOGGING_BUFFERED_STREAM", "0", 1);
+    RCLCPP_WARN(this->get_logger(),
+      "USB_CAM_UNBUFFERED_LOG enabled: ROS logs are unbuffered (for crash diagnosis)");
+  }
+
+  // Leave a last-gasp record + maps snapshot if we die on a fatal signal,
+  // and flush log buffers on normal exit.
+  usb_cam::utils::install_crash_handlers();
+  std::atexit(usb_cam::utils::flush_logs_on_exit);
+
   // declare params
   this->declare_parameter("camera_name", "default_cam");
   this->declare_parameter("camera_info_url", "");
@@ -93,11 +110,13 @@ UsbCamNode::UsbCamNode(const rclcpp::NodeOptions& node_options)
 UsbCamNode::~UsbCamNode()
 {
   RCLCPP_WARN(this->get_logger(), "Shutting down");
+  usb_cam::utils::flush_logs_on_exit();
+  // Stop the timer first so in-flight update() cannot touch members we free below.
+  m_timer.reset();
   m_image_msg.reset();
   m_compressed_img_msg.reset();
   m_camera_info_msg.reset();
   m_camera_info.reset();
-  m_timer.reset();
   m_service_capture.reset();
   m_parameters_callback_handle.reset();
 
@@ -725,6 +744,13 @@ bool UsbCamNode::take_and_send_image()
 
 bool UsbCamNode::take_and_send_image_mjpeg()
 {
+  // Publishers/msgs exist only for pixel_format==mjpeg2rgb; pub_compressed
+  // can still be true with other formats (and defaults to true).
+  if (!m_compressed_img_msg || !m_compressed_image_publisher)
+  {
+    return false;
+  }
+
   cv_bridge::CvImagePtr cv_ptr;
   try
   {
@@ -747,7 +773,7 @@ bool UsbCamNode::take_and_send_image_mjpeg()
   m_compressed_image_publisher->publish(*m_compressed_img_msg);
 
   // 只有 pub_raw 为 false 时，才由压缩路径发布 camera_info
-  if (!m_parameters.pub_raw)
+  if (!m_parameters.pub_raw && m_compressed_cam_info_publisher)
   {
     m_compressed_cam_info_publisher->publish(*m_camera_info_msg);
   }
@@ -758,7 +784,11 @@ rcl_interfaces::msg::SetParametersResult
 UsbCamNode::parameters_callback(const std::vector<rclcpp::Parameter>& parameters)
 {
   RCLCPP_DEBUG(this->get_logger(), "Setting parameters for %s", m_parameters.camera_name.c_str());
-  m_timer->reset();
+  // Init may have failed before the timer existed; a param set must not NULL-deref.
+  if (m_timer)
+  {
+    m_timer->reset();
+  }
   assign_params(parameters);
   set_v4l2_params();
   rcl_interfaces::msg::SetParametersResult result;
