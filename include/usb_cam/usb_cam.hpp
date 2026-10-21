@@ -36,11 +36,13 @@ extern "C" {
 }
 
 #include <chrono>
+#include <functional>
 #include <memory>
 #include <algorithm>
 #include <sstream>
 #include <iostream>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "usb_cam/utils.hpp"
@@ -60,6 +62,39 @@ namespace usb_cam
 
 using usb_cam::utils::io_method_t;
 using usb_cam::formats::pixel_format_base;
+
+/// @brief Severity for the UsbCam log sink. Kept independent of rclcpp so the
+/// usb_cam library stays free of a ROS dependency.
+enum class log_level_t {DEBUG, INFO, WARN, ERROR};
+
+using log_fn_t = std::function<void (log_level_t, const std::string &)>;
+
+/// @brief Reject a DQBUF/read payload before it reaches convert/copy.
+/// @return empty string when valid, otherwise a short reason for logging.
+inline std::string frame_payload_error(
+  uint32_t index, uint32_t n_buffers,
+  uint32_t bytesused, uint32_t length, uint32_t flags,
+  size_t max_buffer_bytes)
+{
+  if (index >= n_buffers) {
+    return "buffer index " + std::to_string(index) + " out of range";
+  }
+  if (flags & V4L2_BUF_FLAG_ERROR) {
+    return "driver set V4L2_BUF_FLAG_ERROR";
+  }
+  if (bytesused == 0) {
+    return "empty payload (bytesused=0)";
+  }
+  if (bytesused > length) {
+    return "bytesused " + std::to_string(bytesused) +
+           " exceeds buffer length " + std::to_string(length);
+  }
+  if (max_buffer_bytes != 0 && bytesused > max_buffer_bytes) {
+    return "bytesused " + std::to_string(bytesused) +
+           " exceeds accepted bound " + std::to_string(max_buffer_bytes);
+  }
+  return "";
+}
 
 /// @brief Add more formats here and to driver_supported_formats below as
 /// they are added to this library
@@ -328,6 +363,13 @@ public:
     return m_epoch_time_shift_us;
   }
 
+  /// @brief Route library logs to the given sink (e.g. RCLCPP via the node).
+  /// When unset, messages fall back to std::cerr/std::cout.
+  inline void set_logger(log_fn_t fn)
+  {
+    m_logger = std::move(fn);
+  }
+
   inline std::vector<capture_format_t> supported_formats()
   {
     if (m_supported_formats.size() == 0) {
@@ -356,22 +398,25 @@ public:
 
     if (found_driver_format == nullptr) {
       // List the supported formats of this driver for the user before throwing
-      std::cerr << "This driver supports the following formats:" << std::endl;
+      log(log_level_t::ERROR, "This driver supports the following formats:");
       for (auto driver_fmt : driver_supported_formats(args)) {
-        std::cerr << "\t" << driver_fmt->name() << std::endl;
+        log(log_level_t::ERROR, "\t" + driver_fmt->name());
       }
       throw std::invalid_argument(
               "Specified format `" + args.name + "` is unsupported by this ROS driver"
       );
     }
 
-    std::cout << "This device supports the following formats:" << std::endl;
+    log(log_level_t::INFO, "This device supports the following formats:");
     for (auto fmt : this->supported_formats()) {
       // Always list the devices supported formats for the user
-      std::cout << "\t" << fmt.format.description << " ";
-      std::cout << fmt.v4l2_fmt.width << " x " << fmt.v4l2_fmt.height << " (";
-      std::cout << fmt.v4l2_fmt.discrete.denominator / fmt.v4l2_fmt.discrete.numerator << " Hz)";
-      std::cout << std::endl;
+      log(
+        log_level_t::INFO,
+        std::string("\t") + std::string(reinterpret_cast<const char *>(fmt.format.description)) +
+        " " + std::to_string(fmt.v4l2_fmt.width) + " x " +
+        std::to_string(fmt.v4l2_fmt.height) + " (" +
+        std::to_string(fmt.v4l2_fmt.discrete.denominator / fmt.v4l2_fmt.discrete.numerator) +
+        " Hz)");
 
       if (fmt.v4l2_fmt.pixel_format == found_driver_format->v4l2()) {
         result = true;
@@ -410,6 +455,8 @@ public:
   }
 
 private:
+  void log(log_level_t level, const std::string & msg) const;
+
   void init_read();
   void init_mmap();
   void init_userp();
@@ -433,6 +480,7 @@ private:
   size_t m_max_buffer_bytes;
   std::shared_ptr<usb_cam::utils::buffer[]> m_buffers;
   image_t m_image;
+  log_fn_t m_logger;
 
   AVFrame * m_avframe;
   AVCodec * m_avcodec;

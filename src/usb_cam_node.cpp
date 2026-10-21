@@ -141,6 +141,25 @@ std::string resolve_device_path(const std::string& path)
 
 void UsbCamNode::init()
 {
+  // Route UsbCam library logs into the node logger before any device work.
+  m_camera->set_logger(
+    [this](usb_cam::log_level_t level, const std::string & msg) {
+      switch (level) {
+        case usb_cam::log_level_t::DEBUG:
+          RCLCPP_DEBUG(this->get_logger(), "%s", msg.c_str());
+          break;
+        case usb_cam::log_level_t::INFO:
+          RCLCPP_INFO(this->get_logger(), "%s", msg.c_str());
+          break;
+        case usb_cam::log_level_t::WARN:
+          RCLCPP_WARN(this->get_logger(), "%s", msg.c_str());
+          break;
+        case usb_cam::log_level_t::ERROR:
+          RCLCPP_ERROR(this->get_logger(), "%s", msg.c_str());
+          break;
+      }
+    });
+
   while (m_parameters.frame_id == "")
   {
     RCLCPP_WARN_ONCE(this->get_logger(), "Required Parameters not set...waiting until they are set");

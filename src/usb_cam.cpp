@@ -83,6 +83,25 @@ UsbCam::~UsbCam()
   shutdown();
 }
 
+void UsbCam::log(log_level_t level, const std::string & msg) const
+{
+  if (m_logger) {
+    m_logger(level, msg);
+    return;
+  }
+  // Default sink keeps the library usable without a host logger.
+  switch (level) {
+    case log_level_t::DEBUG:
+    case log_level_t::INFO:
+      std::cout << msg << std::endl;
+      break;
+    case log_level_t::WARN:
+    case log_level_t::ERROR:
+      std::cerr << msg << std::endl;
+      break;
+  }
+}
+
 
 /// @brief Fill destination image with source image. If required, convert a given
 /// V4L2 Image into another type. Look up possible V4L2 pixe formats in the
@@ -121,6 +140,16 @@ void UsbCam::read_frame()
             throw std::runtime_error("Unable to read frame");
         }
       }
+      {
+        const std::string err = frame_payload_error(
+          /* index */ 0, /* n_buffers */ 1,
+          static_cast<uint32_t>(len), m_buffers[0].length,
+          /* flags */ 0, m_max_buffer_bytes);
+        if (!err.empty()) {
+          log(log_level_t::WARN, "usb_cam: dropping read frame: " + err);
+          return;
+        }
+      }
       return process_image(m_buffers[0].start, m_image.data, len);
     case io_method_t::IO_METHOD_MMAP:
       CLEAR(buf);
@@ -137,10 +166,23 @@ void UsbCam::read_frame()
         }
       }
 
+      {
+        const std::string err = frame_payload_error(
+          buf.index, m_number_of_buffers,
+          buf.bytesused, buf.length, buf.flags, m_max_buffer_bytes);
+        if (!err.empty()) {
+          log(log_level_t::WARN, "usb_cam: dropping mmap frame: " + err);
+          // Requeue so the stream keeps draining; one bad buffer must not stall.
+          if (-1 == usb_cam::utils::xioctl(m_fd, static_cast<int>(VIDIOC_QBUF), &buf)) {
+            log(log_level_t::ERROR, "usb_cam: QBUF failed while dropping a bad frame");
+          }
+          return;
+        }
+      }
+
       // Get timestamp from V4L2 image buffer
       m_image.stamp = usb_cam::utils::calc_img_timestamp(buf.timestamp, m_epoch_time_shift_us);
 
-      assert(buf.index < m_number_of_buffers);
       process_image(m_buffers[buf.index].start, m_image.data, buf.bytesused);
 
       /// Requeue buffer so it can be reused
@@ -160,6 +202,19 @@ void UsbCam::read_frame()
             return;
           default:
             throw std::runtime_error("Unable to exchange buffer with driver");
+        }
+      }
+
+      {
+        const std::string err = frame_payload_error(
+          buf.index, m_number_of_buffers,
+          buf.bytesused, buf.length, buf.flags, m_max_buffer_bytes);
+        if (!err.empty()) {
+          log(log_level_t::WARN, "usb_cam: dropping userptr frame: " + err);
+          if (-1 == usb_cam::utils::xioctl(m_fd, static_cast<int>(VIDIOC_QBUF), &buf)) {
+            log(log_level_t::ERROR, "usb_cam: QBUF failed while dropping a bad frame");
+          }
+          return;
         }
       }
 
@@ -202,7 +257,9 @@ void UsbCam::stop_capturing()
       if (-1 == usb_cam::utils::xioctl(m_fd, VIDIOC_STREAMOFF, &type)) {
         // Keep capturing=false: the fd is about to be closed or already dead.
         // Never throw from a cleanup path — shutdown()/~UsbCam call this.
-        std::cerr << "usb_cam: VIDIOC_STREAMOFF failed: " << strerror(errno) << std::endl;
+        log(
+          log_level_t::ERROR,
+          std::string("usb_cam: VIDIOC_STREAMOFF failed: ") + strerror(errno));
       }
       return;
     case io_method_t::IO_METHOD_UNKNOWN:
@@ -332,7 +389,9 @@ void UsbCam::free_buffers()
 
   // Not fatal: close_device() releases the queue as a backstop.
   if (-1 == usb_cam::utils::xioctl(m_fd, static_cast<int>(VIDIOC_REQBUFS), &req)) {
-    std::cerr << "usb_cam: VIDIOC_REQBUFS(0) failed: " << strerror(errno) << std::endl;
+    log(
+      log_level_t::ERROR,
+      std::string("usb_cam: VIDIOC_REQBUFS(0) failed: ") + strerror(errno));
   }
 }
 
@@ -478,8 +537,10 @@ void UsbCam::validate_sizeimage()
   if (pix.sizeimage == 0) {
     // Some drivers leave this unset and still work, so keep the old behaviour
     // and only bound what init_mmap() will accept.
-    std::cerr << "usb_cam: driver reported sizeimage 0 for " << pix.width << "x" << pix.height <<
-      " " << m_image.pixel_format->v4l2_str() << std::endl;
+    log(
+      log_level_t::WARN,
+      "usb_cam: driver reported sizeimage 0 for " + std::to_string(pix.width) + "x" +
+      std::to_string(pix.height) + " " + m_image.pixel_format->v4l2_str());
     m_max_buffer_bytes = limit;
     return;
   }
@@ -612,7 +673,9 @@ void UsbCam::close_device()
   // Teardown must never throw: a destructor or error-unwind path calling
   // shutdown() would std::terminate on a char* / runtime_error escape.
   if (-1 == close(m_fd)) {
-    std::cerr << "usb_cam: close(" << m_device_name << ") failed: " << strerror(errno) << std::endl;
+    log(
+      log_level_t::ERROR,
+      "usb_cam: close(" + m_device_name + ") failed: " + strerror(errno));
   }
 
   m_fd = -1;
@@ -673,23 +736,29 @@ void UsbCam::shutdown()
   try {
     stop_capturing();
   } catch (const std::exception & e) {
-    std::cerr << "usb_cam: stop_capturing during shutdown: " << e.what() << std::endl;
+    log(
+      log_level_t::WARN,
+      std::string("usb_cam: stop_capturing during shutdown: ") + e.what());
   } catch (...) {
-    std::cerr << "usb_cam: stop_capturing during shutdown: unknown error" << std::endl;
+    log(log_level_t::WARN, "usb_cam: stop_capturing during shutdown: unknown error");
   }
   try {
     uninit_device();
   } catch (const std::exception & e) {
-    std::cerr << "usb_cam: uninit_device during shutdown: " << e.what() << std::endl;
+    log(
+      log_level_t::WARN,
+      std::string("usb_cam: uninit_device during shutdown: ") + e.what());
   } catch (...) {
-    std::cerr << "usb_cam: uninit_device during shutdown: unknown error" << std::endl;
+    log(log_level_t::WARN, "usb_cam: uninit_device during shutdown: unknown error");
   }
   try {
     close_device();
   } catch (const std::exception & e) {
-    std::cerr << "usb_cam: close_device during shutdown: " << e.what() << std::endl;
+    log(
+      log_level_t::WARN,
+      std::string("usb_cam: close_device during shutdown: ") + e.what());
   } catch (...) {
-    std::cerr << "usb_cam: close_device during shutdown: unknown error" << std::endl;
+    log(log_level_t::WARN, "usb_cam: close_device during shutdown: unknown error");
   }
 }
 
@@ -787,12 +856,14 @@ void UsbCam::grab_image()
       return;
     }
 
-    std::cerr << "Something went wrong, exiting..." << errno << std::endl;
+    log(
+      log_level_t::ERROR,
+      std::string("Something went wrong, exiting...") + std::to_string(errno));
     throw std::runtime_error(std::string("select() failed: ") + strerror(errno));
   }
 
   if (0 == r) {
-    std::cerr << "Select timeout, exiting..." << std::endl;
+    log(log_level_t::ERROR, "Select timeout, exiting...");
     throw std::runtime_error("select timeout");
   }
 
@@ -810,14 +881,14 @@ bool UsbCam::set_auto_focus(int value)
 
   if (-1 == usb_cam::utils::xioctl(m_fd, static_cast<int>(VIDIOC_QUERYCTRL), &queryctrl)) {
     if (errno != EINVAL) {
-      std::cerr << "VIDIOC_QUERYCTRL" << std::endl;
+      log(log_level_t::ERROR, "VIDIOC_QUERYCTRL");
       return false;
     } else {
-      std::cerr << "V4L2_CID_FOCUS_AUTO is not supported" << std::endl;
+      log(log_level_t::WARN, "V4L2_CID_FOCUS_AUTO is not supported");
       return false;
     }
   } else if (queryctrl.flags & V4L2_CTRL_FLAG_DISABLED) {
-    std::cerr << "V4L2_CID_FOCUS_AUTO is not supported" << std::endl;
+    log(log_level_t::WARN, "V4L2_CID_FOCUS_AUTO is not supported");
     return false;
   } else {
     memset(&control, 0, sizeof(control));
@@ -825,7 +896,7 @@ bool UsbCam::set_auto_focus(int value)
     control.value = value;
 
     if (-1 == usb_cam::utils::xioctl(m_fd, static_cast<int>(VIDIOC_S_CTRL), &control)) {
-      std::cerr << "VIDIOC_S_CTRL" << std::endl;
+      log(log_level_t::ERROR, "VIDIOC_S_CTRL");
       return false;
     }
   }
@@ -859,7 +930,7 @@ bool UsbCam::set_v4l_parameter(const std::string & param, int value)
   // Look up control ID
   auto it = param_map.find(param);
   if (it == param_map.end()) {
-    std::cerr << "usb_cam: unknown parameter '" << param << "'" << std::endl;
+    log(log_level_t::WARN, "usb_cam: unknown parameter '" + param + "'");
     return false;
   }
   int control_id = it->second;
@@ -869,7 +940,7 @@ bool UsbCam::set_v4l_parameter(const std::string & param, int value)
   CLEAR(query);
   query.id = control_id;
   if (ioctl(m_fd, VIDIOC_QUERYCTRL, &query) < 0) {
-    std::cerr << "usb_cam: parameter '" << param << "' not supported by device" << std::endl;
+    log(log_level_t::WARN, "usb_cam: parameter '" + param + "' not supported by device");
     return false;
   }
 
@@ -884,7 +955,9 @@ bool UsbCam::set_v4l_parameter(const std::string & param, int value)
   ctrl.id = control_id;
   ctrl.value = clamped;
   if (ioctl(m_fd, VIDIOC_S_CTRL, &ctrl) < 0) {
-    std::cerr << "usb_cam: failed to set '" << param << "' to " << clamped << std::endl;
+    log(
+      log_level_t::WARN,
+      "usb_cam: failed to set '" + param + "' to " + std::to_string(clamped));
     return false;
   }
 
@@ -904,8 +977,9 @@ bool UsbCam::set_v4l_parameter(const std::string & param, const std::string & va
     int int_value = std::stoi(value);
     return set_v4l_parameter(param, int_value);
   } catch (const std::exception & e) {
-    std::cerr << "usb_cam: invalid value '" << value << "' for parameter '" << param << "'" <<
-      std::endl;
+    log(
+      log_level_t::WARN,
+      "usb_cam: invalid value '" + value + "' for parameter '" + param + "'");
     return false;
   }
 }
