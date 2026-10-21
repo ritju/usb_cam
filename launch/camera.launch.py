@@ -42,7 +42,7 @@ sys.path.append(dir_path)
 from camera_config import CameraConfig, USB_CAM_DIR  # noqa: E402
 
 from launch import LaunchDescription  # noqa: E402
-from launch.actions import GroupAction  # noqa: E402
+from launch.actions import GroupAction, SetEnvironmentVariable  # noqa: E402
 from launch_ros.actions import Node  # noqa: E402
 
 import json
@@ -107,6 +107,11 @@ if camera_infos != None:
 
 def generate_launch_description():
     ld = LaunchDescription()
+
+    # Diagnostic: USB_CAM_UNBUFFERED_LOG=1 → every ROS log line is written
+    # immediately (survives OOM-kill). Default off to avoid IO amplification.
+    if os.getenv('USB_CAM_UNBUFFERED_LOG', '0').lower() in ('1', 'true', 'yes'):
+        ld.add_action(SetEnvironmentVariable('RCUTILS_LOGGING_BUFFERED_STREAM', '0'))
 
     parser = argparse.ArgumentParser(description='usb_cam demo')
     parser.add_argument('-n', '--node-name', dest='node_name', type=str,

@@ -305,3 +305,43 @@ TEST(test_usb_cam_utils, test_set_logger_routes_messages) {
   } catch (const std::exception &) {
   }
 }
+
+TEST(test_usb_cam_utils, test_last_gasp_and_maps_snapshot) {
+  const std::string dir = "/tmp/usb_cam_crashlog_test";
+  std::filesystem::remove_all(dir);
+  std::filesystem::create_directories(dir);
+
+  usb_cam::utils::write_last_gasp(dir.c_str(), 11);
+  ASSERT_TRUE(std::filesystem::exists(dir + "/usb_cam_last_gasp.log"));
+  {
+    std::ifstream in(dir + "/usb_cam_last_gasp.log");
+    std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    EXPECT_NE(content.find("sig=11"), std::string::npos);
+    EXPECT_NE(content.find("last_gasp"), std::string::npos);
+  }
+
+  ASSERT_TRUE(std::filesystem::exists(dir + "/usb_cam_maps_at_crash.txt"));
+  {
+    std::ifstream in(dir + "/usb_cam_maps_at_crash.txt");
+    std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    // /proc/self/maps always has at least one mapping line
+    EXPECT_NE(content.find('\n'), std::string::npos);
+  }
+
+  // Second call appends, does not truncate
+  usb_cam::utils::write_last_gasp(dir.c_str(), 6);
+  {
+    std::ifstream in(dir + "/usb_cam_last_gasp.log");
+    std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    EXPECT_NE(content.find("sig=11"), std::string::npos);
+    EXPECT_NE(content.find("sig=6"), std::string::npos);
+  }
+
+  std::filesystem::remove_all(dir);
+}
+
+TEST(test_usb_cam_utils, test_ros_log_dir_default) {
+  const std::string d = usb_cam::utils::ros_log_dir();
+  EXPECT_FALSE(d.empty());
+  EXPECT_NE(d.find("/.ros/log"), std::string::npos);
+}

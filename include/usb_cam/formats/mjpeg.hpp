@@ -86,10 +86,14 @@ public:
       8,
       true),
     m_avcodec(avcodec_find_decoder(AVCodecID::AV_CODEC_ID_MJPEG)),
+    m_avcodec_context(NULL),
     m_avparser(av_parser_init(AVCodecID::AV_CODEC_ID_MJPEG)),
     m_avframe_device(av_frame_alloc()),
     m_avframe_rgb(av_frame_alloc()),
     m_avoptions(NULL),
+    m_sws_context(NULL),
+    m_avframe_device_size(0),
+    m_avframe_rgb_size(0),
     m_averror_str(reinterpret_cast<char *>(malloc(AV_ERROR_MAX_STRING_SIZE)))
   {
     if (!m_avcodec) {
@@ -100,7 +104,18 @@ public:
       throw std::runtime_error("Could not find MJPEG parser");
     }
 
+    if (!m_avframe_device || !m_avframe_rgb) {
+      throw std::runtime_error("Could not allocate AVFrame for MJPEG decode");
+    }
+
+    if (!m_averror_str) {
+      throw std::runtime_error("Could not allocate MJPEG error string");
+    }
+
     m_avcodec_context = avcodec_alloc_context3(m_avcodec);
+    if (!m_avcodec_context) {
+      throw std::runtime_error("Could not allocate MJPEG codec context");
+    }
 
     m_avframe_device->width = args.width;
     m_avframe_device->height = args.height;
@@ -115,6 +130,9 @@ public:
       args.width, args.height, (AVPixelFormat)m_avframe_device->format,
       args.width, args.height, (AVPixelFormat)m_avframe_rgb->format, SWS_FAST_BILINEAR,
       NULL, NULL, NULL);
+    if (!m_sws_context) {
+      throw std::runtime_error("Could not create MJPEG sws context");
+    }
 
     // Suppress warnings from ffmpeg libraries to avoid spamming the console
     av_log_set_level(AV_LOG_FATAL);
@@ -142,16 +160,19 @@ public:
     // Initialize AVCodecContext
     if (avcodec_open2(m_avcodec_context, m_avcodec, &m_avoptions) < 0) {
       throw std::runtime_error("Could not open decoder");
-      return;
     }
 
+    // Frame buffers must exist before convert() writes through them; a silent
+    // failure here becomes a NULL deref in sws_scale under memory pressure.
     m_result = av_frame_get_buffer(m_avframe_device, m_align);
     if (m_result != 0) {
       print_av_error_string(m_result);
+      throw std::runtime_error("Could not allocate MJPEG device frame buffer");
     }
     m_result = av_frame_get_buffer(m_avframe_rgb, m_align);
     if (m_result != 0) {
       print_av_error_string(m_result);
+      throw std::runtime_error("Could not allocate MJPEG RGB frame buffer");
     }
   }
 
@@ -184,11 +205,35 @@ public:
   void convert(const char * & src, char * & dest, const int & bytes_used) override
   {
     m_result = 0;
+
+    if (!m_sws_context || !m_avframe_device || !m_avframe_rgb ||
+      !m_avframe_device->data[0] || !m_avframe_rgb->data[0])
+    {
+      std::cerr << "MJPEG convert skipped: decoder not fully initialized" << std::endl;
+      return;
+    }
+
+    if (bytes_used <= 0) {
+      std::cerr << "MJPEG convert skipped: empty packet" << std::endl;
+      return;
+    }
+
     // clear the picture
-    memset(dest, 0, m_avframe_device_size);
+    memset(dest, 0, m_avframe_rgb_size);
 
     auto avpacket = av_packet_alloc();
-    av_new_packet(avpacket, bytes_used);
+    if (!avpacket) {
+      // ENOMEM here is exactly the pre-OOM condition; never memcpy through NULL.
+      std::cerr << "MJPEG convert skipped: av_packet_alloc failed" << std::endl;
+      return;
+    }
+    m_result = av_new_packet(avpacket, bytes_used);
+    if (m_result < 0 || !avpacket->data) {
+      std::cerr << "MJPEG convert skipped: av_new_packet failed: ";
+      print_av_error_string(m_result);
+      av_packet_free(&avpacket);
+      return;
+    }
     memcpy(avpacket->data, src, bytes_used);
 
     // Pass src MJPEG image to decoder
@@ -210,6 +255,11 @@ public:
     } else if (m_result < 0) {
       std::cerr << "Failed to recieve decoded frame from codec: ";
       print_av_error_string(m_result);
+      return;
+    }
+
+    if (!m_avframe_device->data[0]) {
+      std::cerr << "MJPEG convert skipped: decoder returned a NULL frame" << std::endl;
       return;
     }
 
