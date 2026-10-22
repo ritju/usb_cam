@@ -38,6 +38,7 @@ extern "C" {
 #include <string>
 #include <vector>
 
+#include "usb_cam/ffmpeg_capture.hpp"
 #include "usb_cam/format_mapping.hpp"
 #include "usb_cam/timestamps.hpp"
 
@@ -94,4 +95,31 @@ TEST(test_ffmpeg_capture_file, file_stream_pts_are_usable)
   const int64_t pts = 1700000000LL * 1000000LL;
   const timespec ts = usb_cam::timestamps::pts_to_timespec(pts, tb);
   EXPECT_EQ(ts.tv_sec, 1700000000);
+}
+
+TEST(test_ffmpeg_capture_file, packet_payload_error_gates_empty_and_oversize)
+{
+  // Happy path
+  EXPECT_EQ(usb_cam::packet_payload_error(1024, 2048), "");
+
+  // Empty payload
+  EXPECT_NE(usb_cam::packet_payload_error(0, 2048), "");
+
+  // Oversize passthrough packet must be rejected, not truncated
+  EXPECT_NE(usb_cam::packet_payload_error(4096, 2048), "");
+
+  // bound == 0 disables that particular bound
+  EXPECT_EQ(usb_cam::packet_payload_error(4096, 0), "");
+}
+
+TEST(test_ffmpeg_capture_file, grab_throws_when_not_open)
+{
+  usb_cam::FfmpegCapture capture;
+  char buf[16] = {0};
+  timespec stamp{};
+  EXPECT_THROW(capture.grab(buf, sizeof(buf), stamp), std::runtime_error);
+
+  // Empty destination is a hard precondition failure too.
+  usb_cam::FfmpegCapture capture2;
+  EXPECT_THROW(capture2.grab(nullptr, 0, stamp), std::runtime_error);
 }

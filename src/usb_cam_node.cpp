@@ -404,9 +404,8 @@ void UsbCamNode::assign_params(const std::vector<rclcpp::Parameter>& parameters)
   }
 }
 
-/// @brief Apply camera controls via FFmpeg options when available.
-/// UVC controls are not supported by the FFmpeg v4l2 demuxer; each call
-/// warns once and is non-fatal.
+/// @brief Lazily create compressed message/publishers so a runtime toggle of
+/// pub_compressed cannot hit a null publisher.
 void UsbCamNode::ensure_compressed_publishers()
 {
   if (!m_compressed_img_msg)

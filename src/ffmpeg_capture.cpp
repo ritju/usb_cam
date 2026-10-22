@@ -28,7 +28,6 @@
 
 #include "usb_cam/ffmpeg_capture.hpp"
 
-#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <iostream>
@@ -361,25 +360,56 @@ bool FfmpegCapture::grab(char * dest, size_t dest_size, timespec & stamp)
       return true;
     }
 
+    // Send the packet; EAGAIN means the decoder is full and we must drain
+    // output before the packet can be accepted. Keep the packet alive until
+    // it is accepted or explicitly dropped so nothing is lost silently.
     int ret2 = avcodec_send_packet(m_dec_ctx, m_packet);
-    av_packet_unref(m_packet);
-    if (ret2 < 0 && ret2 != AVERROR(EAGAIN)) {
+    if (ret2 == AVERROR(EAGAIN)) {
+      ret2 = avcodec_receive_frame(m_dec_ctx, m_frame);
+      if (ret2 == 0) {
+        // Decoder drained one earlier frame; resend the held packet now
+        // that there is room, then fall through to process the drained frame.
+        const int resend = avcodec_send_packet(m_dec_ctx, m_packet);
+        if (resend < 0 && resend != AVERROR(EAGAIN)) {
+          char errbuf[AV_ERROR_MAX_STRING_SIZE] = {0};
+          av_strerror(resend, errbuf, sizeof(errbuf));
+          note_dropped_frame(std::string("avcodec_send_packet resend failed: ") + errbuf);
+        }
+        av_packet_unref(m_packet);
+        // Process m_frame below.
+      } else {
+        av_packet_unref(m_packet);
+        if (ret2 == AVERROR(EAGAIN)) {
+          // Decoder wants more input but refused this packet: drop and retry.
+          note_dropped_frame("decoder refused packet (EAGAIN on send and receive)");
+          continue;
+        }
+        char errbuf[AV_ERROR_MAX_STRING_SIZE] = {0};
+        av_strerror(ret2, errbuf, sizeof(errbuf));
+        note_dropped_frame(std::string("avcodec_receive_frame failed: ") + errbuf);
+        stamp = timestamps::wallclock_now();
+        return false;
+      }
+    } else if (ret2 < 0) {
+      av_packet_unref(m_packet);
       char errbuf[AV_ERROR_MAX_STRING_SIZE] = {0};
       av_strerror(ret2, errbuf, sizeof(errbuf));
       note_dropped_frame(std::string("avcodec_send_packet failed: ") + errbuf);
-      continue;
-    }
-
-    ret2 = avcodec_receive_frame(m_dec_ctx, m_frame);
-    if (ret2 == AVERROR(EAGAIN)) {
-      continue;
-    }
-    if (ret2 < 0) {
-      char errbuf[AV_ERROR_MAX_STRING_SIZE] = {0};
-      av_strerror(ret2, errbuf, sizeof(errbuf));
-      note_dropped_frame(std::string("avcodec_receive_frame failed: ") + errbuf);
       stamp = timestamps::wallclock_now();
       return false;
+    } else {
+      av_packet_unref(m_packet);
+      ret2 = avcodec_receive_frame(m_dec_ctx, m_frame);
+      if (ret2 == AVERROR(EAGAIN)) {
+        continue;
+      }
+      if (ret2 < 0) {
+        char errbuf[AV_ERROR_MAX_STRING_SIZE] = {0};
+        av_strerror(ret2, errbuf, sizeof(errbuf));
+        note_dropped_frame(std::string("avcodec_receive_frame failed: ") + errbuf);
+        stamp = timestamps::wallclock_now();
+        return false;
+      }
     }
 
     const int src_fmt = m_frame->format;
@@ -402,7 +432,7 @@ bool FfmpegCapture::grab(char * dest, size_t dest_size, timespec & stamp)
         for (int x = 0; x < m_width; ++x) {
           const uint16_t sample = static_cast<uint16_t>(src_row[2 * x]) |
             (static_cast<uint16_t>(src_row[2 * x + 1]) << 8);
-          dst_row[x] = static_cast<uint8_t>(sample >> 2);
+          dst_row[x] = static_cast<uint8_t>((sample & 0x3FF) >> 2);
         }
       }
     } else if (src_fmt == static_cast<int>(m_format.out_pix_fmt)) {
