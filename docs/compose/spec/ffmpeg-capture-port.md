@@ -1,14 +1,25 @@
 ---
 feature: ffmpeg-capture-port
-status: in-progress
+status: delivered
 updated: 2026-10-22
 branch: feature/ffmpeg-capture-port
-commits: # leave empty while in progress; fill at delivery
+commits: dfb0bff..7fe5a01
 ---
 
 # FFmpeg Capture Port onto develop
 
 ## Report
+
+**What was built** — 从 `develop` 切出 `feature/ffmpeg-capture-port`，移植 `feature/ffmpeg-capture` @ `e6d4b50` 的 FFmpeg 采集核心：`FfmpegCapture`（libavdevice `video4linux2` 单 fd 生命周期）、`format_mapping`（11 个旧 `pixel_format` 名）、`timestamps`（pts→timespec），`UsbCam` 收敛为 facade，删除全部 `VIDIOC_*`/`formats/*`/`utils.hpp`。相机初始化与取流完全经 FFmpeg 封装，不再直接操作设备 fd。回植 develop 硬化：`crashlog.hpp`（自 `utils.hpp` 迁出，含 `kCrashLogDirLen` 路径缓存）、`logging.hpp` + `set_logger` 转发 + 节点 `RCLCPP_*_THROTTLE` 桥、`note_dropped_frame` 丢帧统计。刻意变更：`grab` 软失败（瞬时故障丢帧返回 false，node 跳过本拍发布，绝不发脏缓冲）；透传超长包拒绝而非 `std::min` 截断；`avcodec_send_packet` EAGAIN 先 drain 再 resend，不再静默丢包。不含 GPU/GpuMat 池提交（`878c574`..`73615a4`）。
+
+**Verification** — `colcon build --merge-install --packages-select usb_cam` PASS；gtest 23/23 PASS（format_mapping 5 + timestamps 5 + controls 3 + ffmpeg_capture_file 5 + crashlog 3 + logging 2）；`grep -rnE 'videodev2|VIDIOC_|V4L2_PIX_FMT|xioctl|v4l2_'` 于 include/src/test 为空。lint：uncrustify 对 `usb_cam_node.*` Allman 风格、flake8 对 `launch/*.py`、cppcheck 可执行缺失均为 **PRE-EXISTING**。真机冒烟 **未跑**（本机无 `/dev/video*`，T7 遗留）。
+
+**Journey log** —
+1. 分叉后 develop 合入 5 个硬化特性、ffmpeg 分支重写同一批文件，`git merge` 冲突不可维护 → 按文件整体检出 `e6d4b50` + 手工回植硬化。
+2. `e6d4b50` 的 `grab` 对瞬时故障 **抛异常**，而 node timer 无 try/catch，USB 抖动会杀掉整流 → 改为软失败 + 跳过发布（相对源分支的刻意行为变更，已在 S2 记录）。
+3. 评审指出 `avcodec_send_packet` EAGAIN 时 packet 已 unref 却未 resend，静默丢包 → 保持 packet 存活，drain 一帧后 resend。
+4. 评审指出 Y10_PACK 缺 `& 0x3FF` 掩码、`ensure_compressed_publishers` 文档串错误、grab 路径无测试 → 同轮修复。
+5. 预存问题（不在本 port 范围）：`undistort_image=true` 时 resize 守卫不刷新 encoding，第 2 帧起 RGB 被当 BGR8 解读——develop `dfb0bff` 即存在，值得单独开 issue。
 
 ## [S1] Problem
 
@@ -92,10 +103,10 @@ pkg-config `IMPORTED_TARGET`：libavformat/libavdevice/libavcodec/libavutil/libs
 
 ## Tasks
 
-- [ ] T1: 分支 + 抽出 `crashlog.hpp`/`logging.hpp` + 拆分测试 — acceptance: 纯搬迁后现有 V4L2 树构建与测试仍绿 (covers: S2)
-- [ ] T2: 整体检出 e6d4b50 采集文件，删除 V4L2 表面 — acceptance: 文件面符合 S2；库可编译 (covers: S2; depends: T1)
-- [ ] T3: facade + logger 转发 + 软失败 grab + 包检查 — acceptance: `get_image` 软失败返回 false 不抛；透传不截断；丢帧有日志 (covers: S2; depends: T2)
-- [ ] T4: node 硬化回植 + CMake/package — acceptance: 节点构建；7 级日志桥；crashlog 完好；grab 失败不发布 (covers: S2; depends: T3)
-- [ ] T5: 6 目标测试套件 — acceptance: `colcon test` 全绿 (covers: S2; depends: T4)
-- [ ] T6: 验证门 + 本文档定稿 — acceptance: 构建/测试/grep 门通过；spec delivered (covers: S2; depends: T5)
+- [x] T1: 分支 + 抽出 `crashlog.hpp`/`logging.hpp` + 拆分测试 — acceptance: 纯搬迁后现有 V4L2 树构建与测试仍绿 (covers: S2)
+- [x] T2: 整体检出 e6d4b50 采集文件，删除 V4L2 表面 — acceptance: 文件面符合 S2；库可编译 (covers: S2; depends: T1)
+- [x] T3: facade + logger 转发 + 软失败 grab + 包检查 — acceptance: `get_image` 软失败返回 false 不抛；透传不截断；丢帧有日志 (covers: S2; depends: T2)
+- [x] T4: node 硬化回植 + CMake/package — acceptance: 节点构建；7 级日志桥；crashlog 完好；grab 失败不发布 (covers: S2; depends: T3)
+- [x] T5: 6 目标测试套件 — acceptance: `colcon test` 全绿 (covers: S2; depends: T4)
+- [x] T6: 验证门 + 本文档定稿 — acceptance: 构建/测试/grep 门通过；spec delivered (covers: S2; depends: T5)
 - [ ] T7: 真机冒烟 — acceptance: 启动/参数兼容/hz/stamp/set_capture/双相机/respawn 通过 (covers: S2; depends: T6) **本机无相机设备**
