@@ -1,4 +1,4 @@
-// Copyright 2023 Evan Flynn
+// Copyright 2014 Robert Bosch, LLC
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are met:
@@ -10,7 +10,7 @@
 //      notice, this list of conditions and the following disclaimer in the
 //      documentation and/or other materials provided with the distribution.
 //
-//    * Neither the name of the Evan Flynn nor the names of its
+//    * Neither the name of the Robert Bosch, LLC nor the names of its
 //      contributors may be used to endorse or promote products derived from
 //      this software without specific prior written permission.
 //
@@ -26,24 +26,25 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
+#ifndef USB_CAM__LOGGING_HPP_
+#define USB_CAM__LOGGING_HPP_
 
-#include <gtest/gtest.h>
+#include <functional>
+#include <string>
 
-#include <linux/videodev2.h>
+namespace usb_cam
+{
 
-#include "usb_cam/formats/pixel_format_base.hpp"
+/// @brief Severity for the UsbCam log sink. Kept independent of rclcpp so the
+/// usb_cam library stays free of a ROS dependency.
+/// THROTTLE variants map to RCLCPP_*_THROTTLE (see UsbCamNode logger bridge).
+enum class log_level_t {DEBUG, DEBUG_THROTTLE, INFO, INFO_THROTTLE, WARN, WARN_THROTTLE, ERROR};
 
-TEST(test_pixel_formats, pixel_format_base_class) {
-  auto test_pix_fmt = usb_cam::formats::default_pixel_format();
+/// Default throttle window for *_THROTTLE levels, in milliseconds.
+constexpr int kLogThrottleMs = 5000;
 
-  EXPECT_EQ(test_pix_fmt.name(), "yuyv");
-  EXPECT_EQ(test_pix_fmt.v4l2(), V4L2_PIX_FMT_YUYV);
-  EXPECT_EQ(test_pix_fmt.channels(), 2);
-  EXPECT_EQ(test_pix_fmt.bit_depth(), 8);
-  EXPECT_EQ(test_pix_fmt.requires_conversion(), false);
+using log_fn_t = std::function<void (log_level_t, const std::string &)>;
 
-  EXPECT_EQ(test_pix_fmt.is_bayer(), false);
-  // TOOD(flynneva): should this be true for `yuyv`?
-  EXPECT_EQ(test_pix_fmt.is_color(), false);
-  EXPECT_EQ(test_pix_fmt.is_mono(), false);
-}
+}  // namespace usb_cam
+
+#endif  // USB_CAM__LOGGING_HPP_
