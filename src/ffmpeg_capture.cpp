@@ -32,12 +32,15 @@ extern "C" {
 #include <libavdevice/avdevice.h>
 }
 
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <thread>
 
+#include "usb_cam/device_preflight.hpp"
 #include "usb_cam/timestamps.hpp"
 
 namespace usb_cam
@@ -89,6 +92,30 @@ void FfmpegCapture::open(const capture_config_t & config)
 {
   close();
 
+  // Debounce: frequent close→open is what re-triggers UVC re-enum and the
+  // garbage-descriptor → REQBUFS-GB → OOM feedback loop (sizeimage-guard H2).
+  if (m_ever_closed) {
+    const auto since_close = std::chrono::steady_clock::now() - m_last_close;
+    const auto min_gap = std::chrono::milliseconds(500);
+    if (since_close < min_gap) {
+      const auto wait = min_gap - since_close;
+      log(
+        log_level_t::WARN,
+        "open after close within " +
+        std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(wait).count()) +
+        " ms; waiting to debounce device re-init");
+      std::this_thread::sleep_for(wait);
+    }
+  }
+
+  const size_t vm_before = preflight::read_vm_peak_kb();
+
+  // Device readiness gate: do not feed FFmpeg a half-appeared UVC node.
+  std::string ready_detail;
+  if (!preflight::wait_device_ready(config.device_path, 2000, 100, &ready_detail)) {
+    throw std::runtime_error("device not ready: " + ready_detail);
+  }
+
   m_device_path = config.device_path;
   m_format = config.format;
   m_encoding = m_format.ros_encoding;
@@ -96,6 +123,29 @@ void FfmpegCapture::open(const capture_config_t & config)
   m_height = config.height;
   m_pass_through =
     (m_format.policy == format_mapping::decode_policy_t::PACKET_PASSTHROUGH);
+
+  // One-shot read-only probe: refuse garbage sizeimage before FFmpeg's
+  // REQBUFS/mmap would allocate it (sizeimage-guard C4 lesson).
+  {
+    const size_t bound = preflight::sizeimage_bound(
+      m_format.input_format, m_width, m_height);
+    uint32_t sizeimage = 0;
+    std::string probe_err;
+    if (preflight::probe_sizeimage(m_device_path, &sizeimage, &probe_err)) {
+      log(
+        log_level_t::INFO,
+        "preflight sizeimage=" + std::to_string(sizeimage) +
+        " bound=" + std::to_string(bound) + " VmPeak=" +
+        std::to_string(vm_before) + "kB");
+      const std::string bad = preflight::sizeimage_error(sizeimage, bound);
+      if (!bad.empty()) {
+        throw std::runtime_error(
+                "refusing implausible UVC sizeimage on " + m_device_path + ": " + bad);
+      }
+    } else {
+      log(log_level_t::WARN, "sizeimage preflight skipped: " + probe_err);
+    }
+  }
 
   // FFmpeg 4.x avformat_open_input takes a non-const AVInputFormat*
   AVInputFormat * ifmt = const_cast<AVInputFormat *>(av_find_input_format("video4linux2"));
@@ -157,6 +207,15 @@ void FfmpegCapture::open(const capture_config_t & config)
       m_height = stream->codecpar->height;
     }
   }
+  // Refuse garbage negotiated geometry before any frame buffer is sized.
+  if (m_width <= 0 || m_height <= 0 ||
+    m_width > 16384 || m_height > 16384)
+  {
+    close();
+    throw std::runtime_error(
+            "implausible negotiated geometry " + std::to_string(m_width) + "x" +
+            std::to_string(m_height));
+  }
 
   if (!m_pass_through) {
     const AVCodec * codec = avcodec_find_decoder(stream->codecpar->codec_id);
@@ -206,10 +265,19 @@ void FfmpegCapture::open(const capture_config_t & config)
 
   m_is_capturing = true;
   drain_stale();
+
+  const size_t vm_after = preflight::read_vm_peak_kb();
+  log(
+    log_level_t::INFO,
+    "opened " + m_device_path + " " + std::to_string(m_width) + "x" +
+    std::to_string(m_height) + " step=" + std::to_string(m_step) +
+    " frame_size=" + std::to_string(m_frame_size) +
+    " VmPeak=" + std::to_string(vm_before) + "->" + std::to_string(vm_after) + "kB");
 }
 
 void FfmpegCapture::close()
 {
+  const bool was_open = (m_fmt_ctx != nullptr);
   m_is_capturing = false;
   if (m_sws) {
     sws_freeContext(m_sws);
@@ -231,6 +299,10 @@ void FfmpegCapture::close()
   m_sws_src_format = -1;
   m_step = 0;
   m_frame_size = 0;
+  if (was_open) {
+    m_last_close = std::chrono::steady_clock::now();
+    m_ever_closed = true;
+  }
 }
 
 void FfmpegCapture::start_capturing()

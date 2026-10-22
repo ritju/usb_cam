@@ -98,6 +98,10 @@ if(BUILD_TESTING)
     test/test_ffmpeg_capture_file.cpp)
   target_link_libraries(test_ffmpeg_capture_file
     ${PROJECT_NAME} m stdc++)
+  ament_add_gtest(test_device_preflight
+    test/test_device_preflight.cpp)
+  target_link_libraries(test_device_preflight
+    ${PROJECT_NAME} m stdc++)
   ament_add_gtest(test_crashlog
     test/test_crashlog.cpp)
   target_link_libraries(test_crashlog

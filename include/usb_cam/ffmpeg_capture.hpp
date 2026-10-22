@@ -36,6 +36,7 @@ extern "C" {
 #include <libswscale/swscale.h>
 }
 
+#include <chrono>
 #include <cstdint>
 #include <string>
 
@@ -140,6 +141,9 @@ private:
   size_t m_last_payload_size{0};
   size_t m_dropped_frames{0};
   log_fn_t m_logger;
+  /// Debounce close→open so frequent switching cannot hammer the UVC device.
+  std::chrono::steady_clock::time_point m_last_close{};
+  bool m_ever_closed{false};
 };
 
 }  // namespace usb_cam
