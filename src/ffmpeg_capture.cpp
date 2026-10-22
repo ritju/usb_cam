@@ -28,6 +28,10 @@
 
 #include "usb_cam/ffmpeg_capture.hpp"
 
+extern "C" {
+#include <libavdevice/avdevice.h>
+}
+
 #include <cmath>
 #include <cstring>
 #include <iostream>
@@ -42,13 +46,21 @@ namespace usb_cam
 namespace
 {
 
-void set_log_level_once()
+/// One-time FFmpeg bring-up. FFmpeg 4.x does not expose libavdevice's
+/// grabbers (video4linux2, x11grab, ...) through av_find_input_format
+/// until avdevice_register_all() has run; FFmpeg 5+ registers them
+/// automatically and dropped the symbol.
+void init_ffmpeg_once()
 {
   static bool done = false;
-  if (!done) {
-    av_log_set_level(AV_LOG_ERROR);
-    done = true;
+  if (done) {
+    return;
   }
+  av_log_set_level(AV_LOG_ERROR);
+#if LIBAVDEVICE_VERSION_INT < AV_VERSION_INT(59, 0, 0)
+  avdevice_register_all();
+#endif
+  done = true;
 }
 
 std::string framerate_to_string(const double framerate)
@@ -65,7 +77,7 @@ std::string framerate_to_string(const double framerate)
 
 FfmpegCapture::FfmpegCapture()
 {
-  set_log_level_once();
+  init_ffmpeg_once();
 }
 
 FfmpegCapture::~FfmpegCapture()

@@ -123,3 +123,15 @@ TEST(test_ffmpeg_capture_file, grab_throws_when_not_open)
   usb_cam::FfmpegCapture capture2;
   EXPECT_THROW(capture2.grab(nullptr, 0, stamp), std::runtime_error);
 }
+
+TEST(test_ffmpeg_capture_file, video4linux2_demuxer_registered_after_init)
+{
+  // Regression: FFmpeg 4.x hides libavdevice grabbers from
+  // av_find_input_format until avdevice_register_all() runs. Without that
+  // call FfmpegCapture::open always threw "demuxer not available".
+  // Constructing FfmpegCapture runs the one-time bring-up.
+  usb_cam::FfmpegCapture capture;
+  const AVInputFormat * ifmt = av_find_input_format("video4linux2");
+  ASSERT_NE(ifmt, nullptr);
+  EXPECT_NE(std::string(ifmt->name).find("video4linux2"), std::string::npos);
+}
