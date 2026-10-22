@@ -21,6 +21,7 @@ commits: dfb0bff..563dfc6
 4. 评审指出 Y10_PACK 缺 `& 0x3FF` 掩码、`ensure_compressed_publishers` 文档串错误、grab 路径无测试 → 同轮修复。
 5. 预存问题（不在本 port 范围）：`undistort_image=true` 时 resize 守卫不刷新 encoding，第 2 帧起 RGB 被当 BGR8 解读——develop `dfb0bff` 即存在，值得单独开 issue。
 6. **漏网真 bug**：FFmpeg 4.x 下 `av_find_input_format("video4linux2")` 在 `avdevice_register_all()` 前返回 NULL，`open()` 必抛 “demuxer not available”。y4m 文件测试走 libavformat 内建 demuxer，掩盖了这条路径 → 同 `av_log_set_level` 做一次性 bring-up，加 demuxer 注册回归测试；FFmpeg 5+ 用版本宏跳过。
+7. **频繁切换 OOM（uvcvideo URB -1 + dwMaxPayload 垃圾值）** 与 sizeimage-guard H1–H3 同族；FFmpeg port 拆掉了 `validate_sizeimage` 后 REQBUFS 会照单全收驱动垃圾。补 `device_preflight`：设备就绪门、只读 `VIDIOC_G_FMT` sizeimage 拒绝、`VmPeak` 前后追踪、close→open 500ms 去抖；未就绪/尺寸不合理直接拒绝进 FFmpeg。
 
 ## [S1] Problem
 
@@ -85,7 +86,7 @@ UsbCam (facade) --> UsbCamNode (crashlog + log bridge + undistort + publish)
 |----|------|
 | crashlog-persist | `crashlog.hpp` + node install/atexit/UNBUFFERED_LOG/dtor flush |
 | frame-validate-logger + log-throttle | `logging.hpp` + node `RCLCPP_*_THROTTLE` 桥（7 级，`kLogThrottleMs=5000`） |
-| sizeimage-guard | 随 V4L2 路径删除（几何从 `codecpar` 回读；拷贝有界） |
+| sizeimage-guard | V4L2 `validate_sizeimage` 随路径删除；等价防护回到 `device_preflight.hpp`：open 前只读 `VIDIOC_G_FMT` 拒绝垃圾 sizeimage + 几何合理性检查 + 就绪门 + open 去抖 |
 | available_devices / io_method 解析 | 删除（`io_method` 参数仍接受 + warn-once-ignore） |
 | zombie-reaper launch | 不动 |
 | UVC 控件真实控制 | 不实现（stub） |
