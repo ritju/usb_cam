@@ -91,6 +91,20 @@ TEST(test_device_preflight, probe_sizeimage_missing_device_fails_cleanly)
   EXPECT_FALSE(err.empty());
 }
 
+TEST(test_device_preflight, kick_s_fmt_missing_device_fails_cleanly)
+{
+  uint32_t sizeimage = 0;
+  std::string err;
+  EXPECT_FALSE(usb_cam::preflight::kick_s_fmt_and_probe(
+      "/tmp/usb_cam_preflight_no_device", 640, 480, "mjpeg", &sizeimage, &err));
+  EXPECT_FALSE(err.empty());
+
+  // Unknown input_format must not invent a fourcc.
+  EXPECT_EQ(usb_cam::preflight::v4l2_fourcc_for_input_format("not_a_format"), 0u);
+  EXPECT_EQ(usb_cam::preflight::v4l2_fourcc_for_input_format("mjpeg"), V4L2_PIX_FMT_MJPEG);
+  EXPECT_EQ(usb_cam::preflight::v4l2_fourcc_for_input_format("yuyv422"), V4L2_PIX_FMT_YUYV);
+}
+
 TEST(test_device_preflight, read_vm_peak_is_nonzero)
 {
   EXPECT_GT(usb_cam::preflight::read_vm_peak_kb(), 0u);

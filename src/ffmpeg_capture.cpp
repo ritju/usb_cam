@@ -126,26 +126,66 @@ void FfmpegCapture::open(const capture_config_t & config)
   m_pass_through =
     (m_format.policy == format_mapping::decode_policy_t::PACKET_PASSTHROUGH);
 
-  // One-shot read-only probe: refuse garbage sizeimage before FFmpeg's
-  // REQBUFS/mmap would allocate it (sizeimage-guard C4 lesson).
+  // Sizeimage preflight: refuse garbage before FFmpeg's REQBUFS/mmap would
+  // allocate it (sizeimage-guard C4). If G_FMT shows garbage, kick S_FMT
+  // (the ffplay round-trip) so the driver recomputes sizeimage, then re-read.
   {
     const size_t bound = preflight::sizeimage_bound(
       m_format.input_format, m_width, m_height);
-    uint32_t sizeimage = 0;
-    std::string probe_err;
-    if (preflight::probe_sizeimage(m_device_path, &sizeimage, &probe_err)) {
-      log(
-        log_level_t::INFO,
-        "preflight sizeimage=" + std::to_string(sizeimage) +
-        " bound=" + std::to_string(bound) + " VmPeak=" +
-        std::to_string(vm_before) + "kB");
-      const std::string bad = preflight::sizeimage_error(sizeimage, bound);
-      if (!bad.empty()) {
-        throw std::runtime_error(
-                "refusing implausible UVC sizeimage on " + m_device_path + ": " + bad);
+    const int kAttempts = 3;
+    std::string last_reason = "unprobed";
+    for (int attempt = 1; attempt <= kAttempts; ++attempt) {
+      uint32_t sizeimage = 0;
+      std::string probe_err;
+      bool got = preflight::probe_sizeimage(m_device_path, &sizeimage, &probe_err);
+      std::string bad;
+      if (got) {
+        bad = preflight::sizeimage_error(sizeimage, bound);
+      } else {
+        bad = probe_err;
       }
-    } else {
-      log(log_level_t::WARN, "sizeimage preflight skipped: " + probe_err);
+
+      if (got && bad.empty()) {
+        log(
+          log_level_t::INFO,
+          "preflight sizeimage=" + std::to_string(sizeimage) +
+          " bound=" + std::to_string(bound) + " VmPeak=" +
+          std::to_string(vm_before) + "kB");
+        break;
+      }
+
+      last_reason = bad.empty() ? probe_err : bad;
+      log(
+        log_level_t::WARN,
+        "sizeimage preflight attempt " + std::to_string(attempt) + "/" +
+        std::to_string(kAttempts) + " rejected: " + last_reason);
+
+      if (attempt == kAttempts) {
+        throw std::runtime_error(
+                "refusing implausible UVC sizeimage on " + m_device_path +
+                " after " + std::to_string(kAttempts) + " attempts: " + last_reason);
+      }
+
+      // ffplay-equivalent heal: S_FMT with our geometry, then re-read.
+      uint32_t kicked = 0;
+      std::string kick_err;
+      if (preflight::kick_s_fmt_and_probe(
+          m_device_path, m_width, m_height, m_format.input_format, &kicked, &kick_err))
+      {
+        log(
+          log_level_t::WARN,
+          "S_FMT kick re-read sizeimage=" + std::to_string(kicked));
+        const std::string kicked_bad = preflight::sizeimage_error(kicked, bound);
+        if (kicked_bad.empty()) {
+          log(log_level_t::INFO, "sizeimage healed after S_FMT kick");
+          break;
+        }
+        last_reason = kicked_bad;
+      } else {
+        log(log_level_t::WARN, "S_FMT kick failed: " + kick_err);
+      }
+      // Give UVC re-enum / altsetting settle a moment before the next try.
+      std::this_thread::sleep_for(std::chrono::milliseconds(300));
     }
   }
 
@@ -410,11 +450,13 @@ void FfmpegCapture::note_corrupt_frame(const std::string & err)
 
 void FfmpegCapture::maybe_auto_recover()
 {
+  // Orphaned after a failed reopen: no fd but we still have a config.
+  const bool orphaned = (!m_fmt_ctx && m_have_config);
   // Escalate after sustained soft-fails or a run of corrupt frames. One
   // glitch must not bounce the device; a stuck UVC state must.
   const bool soft = m_soft_fail_streak >= 8;
   const bool corrupt = m_corrupt_streak >= 5;
-  if (!soft && !corrupt) {
+  if (!orphaned && !soft && !corrupt) {
     return;
   }
   // Rate-limit: at most one recovery action per second.
@@ -424,8 +466,13 @@ void FfmpegCapture::maybe_auto_recover()
   }
   log(
     log_level_t::ERROR,
-    "auto-recovery triggered (soft_fail_streak=" + std::to_string(m_soft_fail_streak) +
+    std::string("auto-recovery triggered (orphaned=") + (orphaned ? "1" : "0") +
+    " soft_fail_streak=" + std::to_string(m_soft_fail_streak) +
     " corrupt_streak=" + std::to_string(m_corrupt_streak) + ")");
+  // An orphaned capture must jump straight to reopen; lower levels need an fd.
+  if (orphaned) {
+    m_recovery_level = 2;
+  }
   recover_now();
 }
 
@@ -487,6 +534,14 @@ bool FfmpegCapture::recover_now()
 
 bool FfmpegCapture::grab(char * dest, size_t dest_size, timespec & stamp)
 {
+  // A failed L3 reopen leaves no fd; never hard-throw that at the timer path.
+  if (!m_fmt_ctx && m_have_config) {
+    maybe_auto_recover();
+    if (!m_fmt_ctx) {
+      stamp = timestamps::wallclock_now();
+      return false;
+    }
+  }
   if (!m_fmt_ctx || !m_packet || !m_frame) {
     throw std::runtime_error("FfmpegCapture not open");
   }

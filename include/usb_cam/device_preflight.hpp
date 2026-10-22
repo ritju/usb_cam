@@ -206,6 +206,97 @@ inline bool probe_sizeimage(const std::string & path, uint32_t * sizeimage, std:
   return true;
 }
 
+/// @brief Map our FFmpeg input_format name to a V4L2 fourcc for S_FMT.
+inline uint32_t v4l2_fourcc_for_input_format(const std::string & input_format)
+{
+  if (input_format == "mjpeg") {
+    return V4L2_PIX_FMT_MJPEG;
+  }
+  if (input_format == "yuyv422") {
+    return V4L2_PIX_FMT_YUYV;
+  }
+  if (input_format == "uyvy422") {
+    return V4L2_PIX_FMT_UYVY;
+  }
+  if (input_format == "gray") {
+    return V4L2_PIX_FMT_GREY;
+  }
+  if (input_format == "gray16le") {
+    return V4L2_PIX_FMT_Y16;
+  }
+  if (input_format == "rgb24") {
+    return V4L2_PIX_FMT_RGB24;
+  }
+  if (input_format == "yuv420p") {
+    return V4L2_PIX_FMT_YUV420;
+  }
+  return 0;
+}
+
+/// @brief `ffplay`-equivalent kick: VIDIOC_S_FMT with the requested geometry
+/// forces the UVC driver to recompute sizeimage, then G_FMT reads it back.
+/// This is what clears a stuck/garbage dwMaxVideoFrameSize that a plain
+/// G_FMT would keep reporting. Opens and closes its own fd; never streams.
+/// @return true when the re-read sizeimage is present (caller still bounds it).
+inline bool kick_s_fmt_and_probe(
+  const std::string & path, int width, int height, const std::string & input_format,
+  uint32_t * sizeimage, std::string * err)
+{
+  const int fd = ::open(path.c_str(), O_RDWR | O_NONBLOCK | O_CLOEXEC);
+  if (fd < 0) {
+    if (err) {
+      *err = "kick open failed for " + path;
+    }
+    return false;
+  }
+  struct v4l2_format fmt {};
+  fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+  fmt.fmt.pix.width = static_cast<__u32>(width);
+  fmt.fmt.pix.height = static_cast<__u32>(height);
+  fmt.fmt.pix.pixelformat = v4l2_fourcc_for_input_format(input_format);
+  fmt.fmt.pix.field = V4L2_FIELD_NONE;
+  // Zero sizeimage before S_FMT, same hygiene sizeimage-guard used, so the
+  // driver recomputes rather than inheriting a smeared value.
+  fmt.fmt.pix.sizeimage = 0;
+  if (fmt.fmt.pix.pixelformat == 0) {
+    ::close(fd);
+    if (err) {
+      *err = "no V4L2 fourcc for input_format " + input_format;
+    }
+    return false;
+  }
+
+  int rc = ::ioctl(fd, VIDIOC_S_FMT, &fmt);
+  if (rc < 0) {
+    // TRY_FMT is a softer kick if the device refuses S_FMT while busy.
+    rc = ::ioctl(fd, VIDIOC_TRY_FMT, &fmt);
+  }
+  const int saved = errno;
+  if (rc < 0) {
+    ::close(fd);
+    if (err) {
+      *err = "VIDIOC_S_FMT/TRY_FMT failed on " + path + ": " + std::strerror(saved);
+    }
+    return false;
+  }
+
+  struct v4l2_format out {};
+  out.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+  rc = ::ioctl(fd, VIDIOC_G_FMT, &out);
+  const int saved2 = errno;
+  ::close(fd);
+  if (rc < 0) {
+    if (err) {
+      *err = "VIDIOC_G_FMT after kick failed on " + path + ": " + std::strerror(saved2);
+    }
+    return false;
+  }
+  if (sizeimage) {
+    *sizeimage = out.fmt.pix.sizeimage;
+  }
+  return true;
+}
+
 }  // namespace preflight
 }  // namespace usb_cam
 
