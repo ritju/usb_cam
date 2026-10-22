@@ -22,6 +22,7 @@ commits: dfb0bff..563dfc6
 5. 预存问题（不在本 port 范围）：`undistort_image=true` 时 resize 守卫不刷新 encoding，第 2 帧起 RGB 被当 BGR8 解读——develop `dfb0bff` 即存在，值得单独开 issue。
 6. **漏网真 bug**：FFmpeg 4.x 下 `av_find_input_format("video4linux2")` 在 `avdevice_register_all()` 前返回 NULL，`open()` 必抛 “demuxer not available”。y4m 文件测试走 libavformat 内建 demuxer，掩盖了这条路径 → 同 `av_log_set_level` 做一次性 bring-up，加 demuxer 注册回归测试；FFmpeg 5+ 用版本宏跳过。
 7. **频繁切换 OOM（uvcvideo URB -1 + dwMaxPayload 垃圾值）** 与 sizeimage-guard H1–H3 同族；FFmpeg port 拆掉了 `validate_sizeimage` 后 REQBUFS 会照单全收驱动垃圾。补 `device_preflight`：设备就绪门、只读 `VIDIOC_G_FMT` sizeimage 拒绝、`VmPeak` 前后追踪、close→open 500ms 去抖；未就绪/尺寸不合理直接拒绝进 FFmpeg。
+8. **僵死 UVC 流靠手动 ffplay 恢复** — 不操作相机时持续吐异常数据，`ffplay` 一次 S_FMT+STREAM 往返即好。补自动恢复看门狗：坏帧（纯色填充 / raw_mjpeg 无 SOI）与连续软失败累积后按 L1 flush → L2 流重启 → L3 整机 reopen 升级（L3 即 ffplay 等价），带 1s 限速；`recover_now()` 可手动触发。
 
 ## [S1] Problem
 
