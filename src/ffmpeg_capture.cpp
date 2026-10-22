@@ -117,6 +117,8 @@ void FfmpegCapture::open(const capture_config_t & config)
   }
 
   m_device_path = config.device_path;
+  m_config = config;
+  m_have_config = true;
   m_format = config.format;
   m_encoding = m_format.ros_encoding;
   m_width = config.width;
@@ -384,6 +386,7 @@ void FfmpegCapture::log(log_level_t level, const std::string & msg) const
 void FfmpegCapture::note_dropped_frame(const std::string & err)
 {
   ++m_dropped_frames;
+  ++m_soft_fail_streak;
   // First drop and every 30th go to ERROR so long drop runs stay visible;
   // the rest are throttled warnings.
   if (m_dropped_frames == 1 || (m_dropped_frames % 30) == 0) {
@@ -392,6 +395,93 @@ void FfmpegCapture::note_dropped_frame(const std::string & err)
       "dropping frame (" + std::to_string(m_dropped_frames) + " total): " + err);
   } else {
     log(log_level_t::WARN_THROTTLE, "dropping frame: " + err);
+  }
+}
+
+void FfmpegCapture::note_corrupt_frame(const std::string & err)
+{
+  ++m_corrupt_streak;
+  if (m_corrupt_streak == 1 || (m_corrupt_streak % 10) == 0) {
+    log(
+      log_level_t::ERROR,
+      "abnormal frame data (" + std::to_string(m_corrupt_streak) + " consecutive): " + err);
+  }
+}
+
+void FfmpegCapture::maybe_auto_recover()
+{
+  // Escalate after sustained soft-fails or a run of corrupt frames. One
+  // glitch must not bounce the device; a stuck UVC state must.
+  const bool soft = m_soft_fail_streak >= 8;
+  const bool corrupt = m_corrupt_streak >= 5;
+  if (!soft && !corrupt) {
+    return;
+  }
+  // Rate-limit: at most one recovery action per second.
+  const auto now = std::chrono::steady_clock::now();
+  if (m_recoveries > 0 && now - m_last_recovery < std::chrono::seconds(1)) {
+    return;
+  }
+  log(
+    log_level_t::ERROR,
+    "auto-recovery triggered (soft_fail_streak=" + std::to_string(m_soft_fail_streak) +
+    " corrupt_streak=" + std::to_string(m_corrupt_streak) + ")");
+  recover_now();
+}
+
+bool FfmpegCapture::recover_now()
+{
+  if (!m_have_config) {
+    return false;
+  }
+  const auto now = std::chrono::steady_clock::now();
+  ++m_recoveries;
+  m_last_recovery = now;
+
+  // Level 1: drop buffered packets (cheap). Then escalate on next trigger.
+  if (m_recovery_level < 1) {
+    m_recovery_level = 1;
+    log(log_level_t::WARN, "recovery L1: flush + drain stale packets");
+    if (m_fmt_ctx) {
+      avformat_flush(m_fmt_ctx);
+    }
+    drain_stale();
+    m_soft_fail_streak = 0;
+    m_corrupt_streak = 0;
+    return true;
+  }
+
+  // Level 2: STREAMOFF/STREAMON style toggle without tearing down the fd.
+  if (m_recovery_level < 2) {
+    m_recovery_level = 2;
+    log(log_level_t::WARN, "recovery L2: stream stop/start");
+    stop_capturing();
+    start_capturing();
+    m_soft_fail_streak = 0;
+    m_corrupt_streak = 0;
+    return true;
+  }
+
+  // Level 3: full close + reopen — the same round-trip `ffplay` performs
+  // (S_FMT + STREAMON) which clears stuck UVC altsetting / descriptor state.
+  m_recovery_level = 3;
+  log(log_level_t::ERROR, "recovery L3: full device reopen (ffplay-equivalent)");
+  capture_config_t cfg = m_config;
+  try {
+    // open() itself debounces close→open, so a burst cannot hammer the bus.
+    open(cfg);
+    m_soft_fail_streak = 0;
+    m_corrupt_streak = 0;
+    // After a successful L3, start again from L1 so a later incident
+    // does not immediately jump to reopen.
+    m_recovery_level = 0;
+    return true;
+  } catch (const std::exception & e) {
+    log(log_level_t::ERROR, std::string("recovery L3 reopen failed: ") + e.what());
+    // Stay at L3 so the next trigger retries the reopen.
+    m_soft_fail_streak = 0;
+    m_corrupt_streak = 0;
+    return false;
   }
 }
 
@@ -406,6 +496,14 @@ bool FfmpegCapture::grab(char * dest, size_t dest_size, timespec & stamp)
   }
   if (!dest || dest_size == 0) {
     throw std::invalid_argument("grab: empty destination");
+  }
+
+  // Act on watchdog streaks from prior frames before doing more I/O.
+  maybe_auto_recover();
+  if (!m_fmt_ctx || !m_is_capturing) {
+    // A level-3 reopen may have just run; next call will pick up.
+    stamp = timestamps::wallclock_now();
+    return false;
   }
 
   for (int attempt = 0; attempt < 64; ++attempt) {
@@ -441,6 +539,15 @@ bool FfmpegCapture::grab(char * dest, size_t dest_size, timespec & stamp)
       }
       stamp = timestamps::pts_to_timespec(ppts, m_time_base);
       av_packet_unref(m_packet);
+      {
+        const std::string bad = frame_corruption_reason(dest, n, true);
+        if (bad.empty()) {
+          m_soft_fail_streak = 0;
+          m_corrupt_streak = 0;
+        } else {
+          note_corrupt_frame(bad);
+        }
+      }
       return true;
     }
 
@@ -542,6 +649,15 @@ bool FfmpegCapture::grab(char * dest, size_t dest_size, timespec & stamp)
 
     av_frame_unref(m_frame);
     m_last_payload_size = m_frame_size;
+    {
+      const std::string bad = frame_corruption_reason(dest, m_frame_size, false);
+      if (bad.empty()) {
+        m_soft_fail_streak = 0;
+        m_corrupt_streak = 0;
+      } else {
+        note_corrupt_frame(bad);
+      }
+    }
     return true;
   }
 

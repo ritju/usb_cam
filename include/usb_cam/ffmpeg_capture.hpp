@@ -37,6 +37,7 @@ extern "C" {
 }
 
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <string>
 
@@ -60,6 +61,40 @@ inline std::string packet_payload_error(size_t payload_size, size_t bound)
   return "";
 }
 
+/// @brief Heuristic for a UVC "abnormal data" frame that still has a legal
+/// size. Strong signals: every byte identical (0x00 / 0xFF / 0x80 dumps),
+/// or a raw_mjpeg payload missing the JPEG SOI marker.
+/// @return empty string when the frame looks plausible, else the reason.
+inline std::string frame_corruption_reason(
+  const char * data, size_t size, bool passthrough_jpeg)
+{
+  if (data == nullptr || size == 0) {
+    return "empty frame buffer";
+  }
+  if (passthrough_jpeg) {
+    // JPEG SOI; a live UVC MJPEG frame must start with FFD8.
+    const unsigned char * u = reinterpret_cast<const unsigned char *>(data);
+    if (size < 2 || u[0] != 0xFF || u[1] != 0xD8) {
+      return "mjpeg payload missing SOI marker";
+    }
+    return "";
+  }
+  const unsigned char first = static_cast<unsigned char>(data[0]);
+  // Only treat as garbage when the whole frame is one byte value and that
+  // value is one of the classic filler patterns. A static scene still has
+  // lighting noise, so full-run equality is a strong signal.
+  size_t i = 1;
+  for (; i < size; ++i) {
+    if (static_cast<unsigned char>(data[i]) != first) {
+      break;
+    }
+  }
+  if (i == size && (first == 0x00 || first == 0xFF || first == 0x80 || first == 0x7F)) {
+    return "frame is solid 0x" + std::to_string(first) + " fill";
+  }
+  return "";
+}
+
 struct capture_config_t
 {
   std::string device_path;
@@ -70,6 +105,9 @@ struct capture_config_t
 };
 
 /// @brief FFmpeg-based V4L2 capture. Owns one AVFormatContext (one fd).
+/// Includes a recovery watchdog: sustained soft-fails or corrupt frames
+/// escalate through flush → stream restart → full reopen (the same
+/// S_FMT/STREAMON round-trip an external `ffplay` performs).
 class FfmpegCapture
 {
 public:
@@ -93,7 +131,12 @@ public:
   /// drop the frame, note it, and return false without throwing. Hard
   /// precondition failures (not open, empty dest) still throw.
   /// On success writes the capture timestamp to `stamp` and returns true.
+  /// Corrupt-looking frames still copy through but count toward auto-recovery.
   bool grab(char * dest, size_t dest_size, timespec & stamp);
+
+  /// @brief Force one recovery step now (used by tests and the node).
+  /// @return true if a recovery action ran.
+  bool recover_now();
 
   /// @brief Route library messages to a sink. Library stays rclcpp-free;
   /// default sink is iostream. nullptr restores the default.
@@ -112,14 +155,20 @@ public:
   size_t last_payload_size() const {return m_last_payload_size;}
   bool is_passthrough() const {return m_pass_through;}
   size_t dropped_frame_count() const {return m_dropped_frames;}
+  size_t recovery_count() const {return m_recoveries;}
+  int recovery_level() const {return m_recovery_level;}
 
 private:
   void ensure_sws(const int src_format);
   void drain_stale();
   void log(log_level_t level, const std::string & msg) const;
   void note_dropped_frame(const std::string & err);
+  void note_corrupt_frame(const std::string & err);
+  void maybe_auto_recover();
 
   std::string m_device_path;
+  capture_config_t m_config{};
+  bool m_have_config{false};
   format_mapping::capture_format_t m_format;
   std::string m_encoding;
 
@@ -144,6 +193,13 @@ private:
   /// Debounce close→open so frequent switching cannot hammer the UVC device.
   std::chrono::steady_clock::time_point m_last_close{};
   bool m_ever_closed{false};
+
+  /// Watchdog state (auto-recovery).
+  int m_soft_fail_streak{0};
+  int m_corrupt_streak{0};
+  size_t m_recoveries{0};
+  int m_recovery_level{0};
+  std::chrono::steady_clock::time_point m_last_recovery{};
 };
 
 }  // namespace usb_cam

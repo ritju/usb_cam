@@ -135,3 +135,33 @@ TEST(test_ffmpeg_capture_file, video4linux2_demuxer_registered_after_init)
   ASSERT_NE(ifmt, nullptr);
   EXPECT_NE(std::string(ifmt->name).find("video4linux2"), std::string::npos);
 }
+
+TEST(test_ffmpeg_capture_file, frame_corruption_reason_detects_fill_and_bad_jpeg)
+{
+  // Solid filler dumps that UVC produces when the altsetting is stuck.
+  std::string zeros(64, '\0');
+  EXPECT_NE(usb_cam::frame_corruption_reason(zeros.data(), zeros.size(), false), "");
+  std::string ffs(64, '\xFF');
+  EXPECT_NE(usb_cam::frame_corruption_reason(ffs.data(), ffs.size(), false), "");
+  std::string mid(64, '\x80');
+  EXPECT_NE(usb_cam::frame_corruption_reason(mid.data(), mid.size(), false), "");
+
+  // A realistic static-scene buffer is not solid fill.
+  std::string scene(64, '\x10');
+  scene[0] = '\x11';
+  EXPECT_EQ(usb_cam::frame_corruption_reason(scene.data(), scene.size(), false), "");
+
+  // raw_mjpeg must start with SOI.
+  const char jpeg[] = {'\xFF', '\xD8', '\xFF', '\xE0'};
+  EXPECT_EQ(usb_cam::frame_corruption_reason(jpeg, sizeof(jpeg), true), "");
+  const char not_jpeg[] = {'\x00', '\x11', '\x22', '\x33'};
+  EXPECT_NE(usb_cam::frame_corruption_reason(not_jpeg, sizeof(not_jpeg), true), "");
+  EXPECT_NE(usb_cam::frame_corruption_reason(nullptr, 0, false), "");
+}
+
+TEST(test_ffmpeg_capture_file, recover_now_without_config_is_noop)
+{
+  usb_cam::FfmpegCapture capture;
+  EXPECT_FALSE(capture.recover_now());
+  EXPECT_EQ(capture.recovery_count(), 0u);
+}
