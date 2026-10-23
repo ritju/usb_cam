@@ -112,12 +112,10 @@ if(BUILD_TESTING)
     ${PROJECT_NAME} m stdc++)
 endif()
 
+# Diagnostic ffplay_* scripts stay in scripts/ on purpose — do not install
+# them into the package (they are host-only tools, not runtime artifacts).
 install(
-  PROGRAMS
-    scripts/show_image.py
-    scripts/ffplay_oom_probe.sh
-    scripts/ffplay_switch_diag.sh
-    scripts/ffplay_back_toggle.sh
+  PROGRAMS scripts/show_image.py
   DESTINATION lib/${PROJECT_NAME})
 
 install(TARGETS
