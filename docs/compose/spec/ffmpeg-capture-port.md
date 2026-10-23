@@ -1,9 +1,9 @@
 ---
 feature: ffmpeg-capture-port
 status: delivered
-updated: 2026-10-22
+updated: 2026-10-23
 branch: feature/ffmpeg-capture-port
-commits: dfb0bff..563dfc6
+commits: dfb0bff..ad133bb
 ---
 
 # FFmpeg Capture Port onto develop
@@ -12,14 +12,14 @@ commits: dfb0bff..563dfc6
 
 **What was built** — 从 `develop` 切出 `feature/ffmpeg-capture-port`，移植 `feature/ffmpeg-capture` @ `e6d4b50` 的 FFmpeg 采集核心：`FfmpegCapture`（libavdevice `video4linux2` 单 fd 生命周期）、`format_mapping`（11 个旧 `pixel_format` 名）、`timestamps`（pts→timespec），`UsbCam` 收敛为 facade，删除全部 `VIDIOC_*`/`formats/*`/`utils.hpp`。相机初始化与取流完全经 FFmpeg 封装，不再直接操作设备 fd。回植 develop 硬化：`crashlog.hpp`（自 `utils.hpp` 迁出，含 `kCrashLogDirLen` 路径缓存）、`logging.hpp` + `set_logger` 转发 + 节点 `RCLCPP_*_THROTTLE` 桥、`note_dropped_frame` 丢帧统计。刻意变更：`grab` 软失败（瞬时故障丢帧返回 false，node 跳过本拍发布，绝不发脏缓冲）；透传超长包拒绝而非 `std::min` 截断；`avcodec_send_packet` EAGAIN 先 drain 再 resend，不再静默丢包。不含 GPU/GpuMat 池提交（`878c574`..`73615a4`）。
 
-**Verification** — `colcon build --merge-install --packages-select usb_cam` PASS；gtest 24/24 PASS（format_mapping 5 + timestamps 5 + controls 3 + ffmpeg_capture_file 6 + crashlog 3 + logging 2）；`grep -rnE 'videodev2|VIDIOC_|V4L2_PIX_FMT|xioctl|v4l2_'` 于 include/src/test 为空。lint：uncrustify 对 `usb_cam_node.*` Allman 风格、flake8 对 `launch/*.py`、cppcheck 可执行缺失均为 **PRE-EXISTING**。真机冒烟 **未跑**（本机无 `/dev/video*`，T7 遗留）。
+**Verification** — `colcon build --merge-install --packages-select usb_cam` PASS；gtest 33/33 PASS（format_mapping 5 + timestamps 5 + controls 3 + ffmpeg_capture_file 8 + device_preflight 7 + crashlog 3 + logging 2）；`grep -rnE 'videodev2|VIDIOC_|V4L2_PIX_FMT|xioctl|v4l2_'` 于 include/src/test 为空。lint：uncrustify 对 `usb_cam_node.*` Allman 风格、flake8 对 `launch/*.py`、cppcheck 可执行缺失均为 **PRE-EXISTING**。真机冒烟 **未跑**（本机无 `/dev/video*`，T7 遗留）。
 
 **Journey log** —
 1. 分叉后 develop 合入 5 个硬化特性、ffmpeg 分支重写同一批文件，`git merge` 冲突不可维护 → 按文件整体检出 `e6d4b50` + 手工回植硬化。
 2. `e6d4b50` 的 `grab` 对瞬时故障 **抛异常**，而 node timer 无 try/catch，USB 抖动会杀掉整流 → 改为软失败 + 跳过发布（相对源分支的刻意行为变更，已在 S2 记录）。
 3. 评审指出 `avcodec_send_packet` EAGAIN 时 packet 已 unref 却未 resend，静默丢包 → 保持 packet 存活，drain 一帧后 resend。
 4. 评审指出 Y10_PACK 缺 `& 0x3FF` 掩码、`ensure_compressed_publishers` 文档串错误、grab 路径无测试 → 同轮修复。
-5. 预存问题（不在本 port 范围）：`undistort_image=true` 时 resize 守卫不刷新 encoding，第 2 帧起 RGB 被当 BGR8 解读——develop `dfb0bff` 即存在，值得单独开 issue。
+5. 预存问题：`undistort_image=true` 时 resize 守卫不刷新 encoding，第 2 帧起 RGB 被当 BGR8——后来在 journey 11 确认为相对 s1_gpu 的 B/R 互换根因并已修。
 6. **漏网真 bug**：FFmpeg 4.x 下 `av_find_input_format("video4linux2")` 在 `avdevice_register_all()` 前返回 NULL，`open()` 必抛 “demuxer not available”。y4m 文件测试走 libavformat 内建 demuxer，掩盖了这条路径 → 同 `av_log_set_level` 做一次性 bring-up，加 demuxer 注册回归测试；FFmpeg 5+ 用版本宏跳过。
 7. **频繁切换 OOM（uvcvideo URB -1 + dwMaxPayload 垃圾值）** 与 sizeimage-guard H1–H3 同族；FFmpeg port 拆掉了 `validate_sizeimage` 后 REQBUFS 会照单全收驱动垃圾。补 `device_preflight`：设备就绪门、只读 `VIDIOC_G_FMT` sizeimage 拒绝、`VmPeak` 前后追踪、close→open 500ms 去抖；未就绪/尺寸不合理直接拒绝进 FFmpeg。
 8. **僵死 UVC 流靠手动 ffplay 恢复** — 不操作相机时持续吐异常数据，`ffplay` 一次 S_FMT+STREAM 往返即好。补自动恢复看门狗：坏帧（纯色填充 / raw_mjpeg 无 SOI）与连续软失败累积后按 L1 flush → L2 流重启 → L3 整机 reopen 升级（L3 即 ffplay 等价），带 1s 限速；`recover_now()` 可手动触发。
