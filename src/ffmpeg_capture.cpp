@@ -30,9 +30,11 @@
 
 extern "C" {
 #include <libavdevice/avdevice.h>
+#include <libavutil/mem.h>
 }
 
 #include <chrono>
+#include <climits>
 #include <cmath>
 #include <cstring>
 #include <iostream>
@@ -92,6 +94,38 @@ void FfmpegCapture::open(const capture_config_t & config)
 {
   close();
 
+  // C4: exponential backoff after failed opens. A poisoned UVC state must
+  // not be hammered — each attempt that slips past preflight is a REQBUFS risk.
+  if (m_open_fail_streak > 0) {
+    const auto since_fail = std::chrono::steady_clock::now() - m_last_open_fail;
+    int backoff_ms = 1000;
+    for (int i = 1; i < m_open_fail_streak && i < 5; ++i) {
+      backoff_ms *= 2;
+    }
+    if (backoff_ms > 30000) {
+      backoff_ms = 30000;
+    }
+    const auto need = std::chrono::milliseconds(backoff_ms);
+    if (since_fail < need) {
+      const auto wait = need - since_fail;
+      log(
+        log_level_t::WARN,
+        "open backed off " + std::to_string(backoff_ms) + "ms after " +
+        std::to_string(m_open_fail_streak) + " failures; waiting " +
+        std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(wait).count()) +
+        "ms");
+      std::this_thread::sleep_for(wait);
+    }
+    // Stop thrashing: after 5 consecutive fails make the caller wait longer
+    // (still return control — node may reconfigure or operator may heal).
+    if (m_open_fail_streak >= 5) {
+      log(
+        log_level_t::ERROR,
+        "open fail streak=" + std::to_string(m_open_fail_streak) +
+        "; refusing to auto-thrash. External recover_now()/reconfigure required.");
+    }
+  }
+
   // Debounce: frequent close→open is what re-triggers UVC re-enum and the
   // garbage-descriptor → REQBUFS-GB → OOM feedback loop (sizeimage-guard H2).
   if (m_ever_closed) {
@@ -126,72 +160,77 @@ void FfmpegCapture::open(const capture_config_t & config)
   m_pass_through =
     (m_format.policy == format_mapping::decode_policy_t::PACKET_PASSTHROUGH);
 
-  // Sizeimage preflight: refuse garbage before FFmpeg's REQBUFS/mmap would
-  // allocate it (sizeimage-guard C4). If G_FMT shows garbage, kick S_FMT
-  // (the ffplay round-trip) so the driver recomputes sizeimage, then re-read.
+  // C1: ALWAYS negotiate the TARGET format first. A clean G_FMT of the
+  // *current* format does not help — libavdevice S_FMTs again inside
+  // avformat_open_input and REQBUFS/av_new_packet use that new sizeimage.
+  // Only after S_FMT→G_FMT of our geometry/fourcc is sizeimage bounded may
+  // we hand the device to FFmpeg.
   {
-    const size_t bound = preflight::sizeimage_bound(
-      m_format.input_format, m_width, m_height);
     const int kAttempts = 3;
     std::string last_reason = "unprobed";
+    uint32_t sizeimage = 0;
     for (int attempt = 1; attempt <= kAttempts; ++attempt) {
-      uint32_t sizeimage = 0;
-      std::string probe_err;
-      bool got = preflight::probe_sizeimage(m_device_path, &sizeimage, &probe_err);
-      std::string bad;
-      if (got) {
-        bad = preflight::sizeimage_error(sizeimage, bound);
-      } else {
-        bad = probe_err;
-      }
-
-      if (got && bad.empty()) {
+      sizeimage = 0;
+      last_reason = preflight::negotiate_and_verify(
+        m_device_path, m_width, m_height, m_format.input_format, &sizeimage);
+      if (last_reason.empty()) {
         log(
           log_level_t::INFO,
-          "preflight sizeimage=" + std::to_string(sizeimage) +
-          " bound=" + std::to_string(bound) + " VmPeak=" +
-          std::to_string(vm_before) + "kB");
+          "negotiated target format sizeimage=" + std::to_string(sizeimage) +
+          " bound=" + std::to_string(
+            preflight::sizeimage_bound(m_format.input_format, m_width, m_height)) +
+          " VmPeak=" + std::to_string(vm_before) + "kB");
         break;
       }
-
-      last_reason = bad.empty() ? probe_err : bad;
       log(
         log_level_t::WARN,
-        "sizeimage preflight attempt " + std::to_string(attempt) + "/" +
+        "target-format negotiate attempt " + std::to_string(attempt) + "/" +
         std::to_string(kAttempts) + " rejected: " + last_reason);
-
-      if (attempt == kAttempts) {
-        throw std::runtime_error(
-                "refusing implausible UVC sizeimage on " + m_device_path +
-                " after " + std::to_string(kAttempts) + " attempts: " + last_reason);
+      if (attempt < kAttempts) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
       }
-
-      // ffplay-equivalent heal: S_FMT with our geometry, then re-read.
-      uint32_t kicked = 0;
-      std::string kick_err;
-      if (preflight::kick_s_fmt_and_probe(
-          m_device_path, m_width, m_height, m_format.input_format, &kicked, &kick_err))
-      {
-        log(
-          log_level_t::WARN,
-          "S_FMT kick re-read sizeimage=" + std::to_string(kicked));
-        const std::string kicked_bad = preflight::sizeimage_error(kicked, bound);
-        if (kicked_bad.empty()) {
-          log(log_level_t::INFO, "sizeimage healed after S_FMT kick");
-          break;
-        }
-        last_reason = kicked_bad;
-      } else {
-        log(log_level_t::WARN, "S_FMT kick failed: " + kick_err);
-      }
-      // Give UVC re-enum / altsetting settle a moment before the next try.
-      std::this_thread::sleep_for(std::chrono::milliseconds(300));
     }
+    if (!last_reason.empty()) {
+      ++m_open_fail_streak;
+      m_last_open_fail = std::chrono::steady_clock::now();
+      throw std::runtime_error(
+              "refusing avformat_open_input on " + m_device_path + ": " + last_reason);
+    }
+    m_open_fail_streak = 0;
   }
+
+  // C2: cap FFmpeg userspace allocs so a garbage sizeimage cannot av_new_packet
+  // its way to OOM. Kernel REQBUFS is gated by C1 above.
+  const size_t alloc_cap = preflight::sizeimage_bound(
+    m_format.input_format, m_width, m_height);
+  if (alloc_cap > 0) {
+    av_max_alloc(static_cast<size_t>(alloc_cap));
+    log(log_level_t::INFO, "av_max_alloc cap=" + std::to_string(alloc_cap));
+  }
+
+  // C3: ffplay-style open — pre-allocated context so an interrupt callback is
+  // armed before demuxer work begins.
+  AVFormatContext * ic = avformat_alloc_context();
+  if (!ic) {
+    if (alloc_cap > 0) {
+      av_max_alloc(INT_MAX);
+    }
+    throw std::runtime_error("avformat_alloc_context failed");
+  }
+  static std::chrono::steady_clock::time_point open_deadline;
+  open_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  ic->interrupt_callback.callback = [](void *) -> int {
+    return std::chrono::steady_clock::now() > open_deadline ? 1 : 0;
+  };
+  ic->interrupt_callback.opaque = nullptr;
+  m_fmt_ctx = ic;
 
   // FFmpeg 4.x avformat_open_input takes a non-const AVInputFormat*
   AVInputFormat * ifmt = const_cast<AVInputFormat *>(av_find_input_format("video4linux2"));
   if (!ifmt) {
+    if (alloc_cap > 0) {
+      av_max_alloc(INT_MAX);
+    }
     throw std::runtime_error("FFmpeg video4linux2 demuxer not available");
   }
 
@@ -214,7 +253,14 @@ void FfmpegCapture::open(const capture_config_t & config)
     }
     av_dict_free(&opts);
   }
+  // Always restore the global alloc cap; FFmpeg uses av_max_alloc globally.
+  if (alloc_cap > 0) {
+    av_max_alloc(INT_MAX);
+  }
   if (ret < 0) {
+    ++m_open_fail_streak;
+    m_last_open_fail = std::chrono::steady_clock::now();
+    m_fmt_ctx = nullptr;  // avformat_open_input frees *ps on failure
     char errbuf[AV_ERROR_MAX_STRING_SIZE] = {0};
     av_strerror(ret, errbuf, sizeof(errbuf));
     throw std::runtime_error(
@@ -512,6 +558,14 @@ bool FfmpegCapture::recover_now()
   // Level 3: full close + reopen — the same round-trip `ffplay` performs
   // (S_FMT + STREAMON) which clears stuck UVC altsetting / descriptor state.
   m_recovery_level = 3;
+  if (m_open_fail_streak >= 5) {
+    log(
+      log_level_t::ERROR,
+      "recovery L3 suppressed: open fail streak=" + std::to_string(m_open_fail_streak));
+    m_soft_fail_streak = 0;
+    m_corrupt_streak = 0;
+    return false;
+  }
   log(log_level_t::ERROR, "recovery L3: full device reopen (ffplay-equivalent)");
   capture_config_t cfg = m_config;
   try {

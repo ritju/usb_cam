@@ -200,6 +200,9 @@ private:
   size_t m_recoveries{0};
   int m_recovery_level{0};
   std::chrono::steady_clock::time_point m_last_recovery{};
+  /// C4: open-fail backoff so garbage-sizeimage retries cannot thrash OOM.
+  int m_open_fail_streak{0};
+  std::chrono::steady_clock::time_point m_last_open_fail{};
 };
 
 }  // namespace usb_cam

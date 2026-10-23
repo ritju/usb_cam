@@ -297,6 +297,31 @@ inline bool kick_s_fmt_and_probe(
   return true;
 }
 
+/// @brief Unconditional target-format negotiation before any FFmpeg open.
+/// S_FMT to the exact geometry/fourcc we will pass to libavdevice, then G_FMT
+/// and bound-check. The current-format G_FMT is NOT trusted: FFmpeg will S_FMT
+/// again inside avformat_open_input and REQBUFS uses that *new* sizeimage.
+/// @return empty string on success; otherwise the refusal reason.
+inline std::string negotiate_and_verify(
+  const std::string & path, int width, int height, const std::string & input_format,
+  uint32_t * sizeimage_out = nullptr)
+{
+  const size_t bound = sizeimage_bound(input_format, width, height);
+  if (bound == 0) {
+    return "invalid geometry " + std::to_string(width) + "x" + std::to_string(height);
+  }
+
+  uint32_t sizeimage = 0;
+  std::string err;
+  if (!kick_s_fmt_and_probe(path, width, height, input_format, &sizeimage, &err)) {
+    return "negotiate failed: " + err;
+  }
+  if (sizeimage_out) {
+    *sizeimage_out = sizeimage;
+  }
+  return sizeimage_error(sizeimage, bound);
+}
+
 }  // namespace preflight
 }  // namespace usb_cam
 

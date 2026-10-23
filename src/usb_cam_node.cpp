@@ -599,7 +599,6 @@ bool UsbCamNode::take_and_send_image()
   {
     m_image_msg->width = m_camera->get_image_width();
     m_image_msg->height = m_camera->get_image_height();
-    m_image_msg->encoding = m_camera->get_encoding();
     m_image_msg->step = m_camera->get_image_step();
     if (m_image_msg->step == 0)
     {
@@ -609,6 +608,10 @@ bool UsbCamNode::take_and_send_image()
     }
     m_image_msg->data.resize(m_camera->get_image_size_in_bytes());
   }
+  // C5: label the buffer with the *capture* encoding every frame. undistort
+  // replaces the msg with BGR8 of the same byte size, so a resize-only update
+  // would leave the next RGB frame labeled bgr8 → B/R channel swap.
+  m_image_msg->encoding = m_camera->get_encoding();
 
   // grab the image, pass image msg buffer to fill
   // Soft-fail: a dropped frame must not publish a stale/garbage buffer.

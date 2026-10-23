@@ -105,6 +105,18 @@ TEST(test_device_preflight, kick_s_fmt_missing_device_fails_cleanly)
   EXPECT_EQ(usb_cam::preflight::v4l2_fourcc_for_input_format("yuyv422"), V4L2_PIX_FMT_YUYV);
 }
 
+TEST(test_device_preflight, negotiate_and_verify_rejects_missing_device_and_bad_geom)
+{
+  // No device: negotiate must fail closed, never "success".
+  std::string reason = usb_cam::preflight::negotiate_and_verify(
+    "/tmp/usb_cam_preflight_no_device", 640, 480, "mjpeg");
+  EXPECT_FALSE(reason.empty());
+
+  // Invalid geometry cannot produce a bound.
+  reason = usb_cam::preflight::negotiate_and_verify("/dev/null", 0, 480, "mjpeg");
+  EXPECT_FALSE(reason.empty());
+}
+
 TEST(test_device_preflight, read_vm_peak_is_nonzero)
 {
   EXPECT_GT(usb_cam::preflight::read_vm_peak_kb(), 0u);
