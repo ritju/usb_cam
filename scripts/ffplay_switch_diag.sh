@@ -46,13 +46,17 @@ Host-side switch-rate / leak attribution (no ROS).
 
 MODES (run in order, default all three):
   hold     play one resolution continuously; no restart
-  reopen   stop/start ffplay at the SAME resolution every INTERVAL
+  reopen   FIXED resolution; every INTERVAL: open camera for REOPEN_HOLD
+           seconds then close (pure open/close frequency, no resize)
   switch   alternate LOW_RES / HIGH_RES every INTERVAL
 
 Environment:
   MODES             space list (default: "hold reopen switch")
   INTERVALS         seconds between events (default: "30 10 5 2")
                     hold mode ignores this and runs once for HOLD_SECONDS
+  PER_INTERVAL_RUNS events per (mode,interval) cell (default: 6)
+  REOPEN_HOLD       seconds each reopen cycle keeps the camera open
+                    (default: 1). INTERVAL is the period between opens.
   HOLD_SECONDS      duration for hold mode (default: 60)
   PER_INTERVAL_RUNS events per (mode,interval) cell (default: 6)
   LOW_RES           default 640x480
@@ -266,16 +270,25 @@ run_cell() {
       stop_back
       ;;
     reopen)
+      # Pure open/close cadence at a FIXED resolution. No renegotiation.
+      # Each period `spec`: open -> capture REOPEN_HOLD seconds -> close
+      # -> idle until the next period. Isolates "how often we open/close".
+      w="${LOW_RES%x*}"; h="${LOW_RES#*x}"
+      local hold="${REOPEN_HOLD:-1}"
       for ((i = 1; i <= PER_INTERVAL_RUNS; i++)); do
-        w="${LOW_RES%x*}"; h="${LOW_RES#*x}"
+        local cycle_start
+        cycle_start=$(date +%s)
         log="$OUTDIR/reopen_${spec}_${i}.log"
         start_back "$w" "$h" "$log"
-        phase_end=$(( $(date +%s) + spec ))
-        while [[ $(date +%s) -lt $phase_end ]]; do
-          sleep 1
-        done
+        sleep "$hold"
         stop_back
-        echo "  reopen $i/$PER_INTERVAL_RUNS mem=$(mem_available_kb)" | tee -a "$SUMMARY"
+        # pad out to a full `spec` period between opens
+        local remain=$(( spec - ( $(date +%s) - cycle_start ) ))
+        if [[ $remain -gt 0 ]]; then
+          sleep "$remain"
+        fi
+        echo "  reopen $i/$PER_INTERVAL_RUNS (open ${hold}s every ${spec}s) mem=$(mem_available_kb)" \
+          | tee -a "$SUMMARY"
       done
       ;;
     switch)
@@ -349,8 +362,8 @@ done
 echo | tee -a "$SUMMARY"
 echo "======== COMPARISON ========" | tee -a "$SUMMARY"
 echo "hold     : baseline leak / continuous capture" | tee -a "$SUMMARY"
-echo "reopen   : open/close cost at fixed resolution" | tee -a "$SUMMARY"
-echo "switch   : + resolution renegotiation" | tee -a "$SUMMARY"
+echo "reopen   : open/close frequency only (fixed res, REOPEN_HOLD per period)" | tee -a "$SUMMARY"
+echo "switch   : + resolution renegotiation at the same period" | tee -a "$SUMMARY"
 echo | tee -a "$SUMMARY"
 if [[ $TOTAL_FAILS -eq 0 ]]; then
   echo "RESULT: no leak and no OOM in this matrix — increase PER_INTERVAL_RUNS or tighten INTERVALS." \
