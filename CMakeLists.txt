@@ -113,7 +113,7 @@ if(BUILD_TESTING)
 endif()
 
 install(
-  PROGRAMS scripts/show_image.py scripts/ffplay_oom_probe.sh
+  PROGRAMS scripts/show_image.py scripts/ffplay_oom_probe.sh scripts/ffplay_switch_diag.sh
   DESTINATION lib/${PROJECT_NAME})
 
 install(TARGETS
