@@ -228,6 +228,8 @@ void FfmpegCapture::open(const capture_config_t & config)
   // FFmpeg 4.x avformat_open_input takes a non-const AVInputFormat*
   AVInputFormat * ifmt = const_cast<AVInputFormat *>(av_find_input_format("video4linux2"));
   if (!ifmt) {
+    avformat_free_context(ic);
+    m_fmt_ctx = nullptr;
     if (alloc_cap > 0) {
       av_max_alloc(INT_MAX);
     }
