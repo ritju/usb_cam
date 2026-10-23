@@ -105,6 +105,11 @@ pids=()
 
 cleanup() {
   trap - EXIT INT TERM
+  # Order: back first, then sidecars (same as the live switch path).
+  if declare -F stop_back >/dev/null 2>&1; then
+    stop_back
+    stop_sidecars
+  fi
   for pid in "${pids[@]:-}"; do
     kill "$pid" 2>/dev/null || true
   done
@@ -138,34 +143,50 @@ start_ffplay() {
   echo $!
 }
 
-# --- sidecar control --------------------------------------------------------
+# --- camera process control -------------------------------------------------
+# Order matters (operator requirement):
+#   start:  sidecars (front/left/right) FIRST, then back
+#   stop:   back FIRST, then sidecars
 
 sidecar_pids=()
+back_pid=""
 
-stop_sidecars() {
-  local name pid
-  for pid in "${sidecar_pids[@]:-}"; do
+stop_pid() {
+  local pid="$1"
+  [[ -n "$pid" ]] || return 0
+  if kill -0 "$pid" 2>/dev/null; then
     kill "$pid" 2>/dev/null || true
-  done
-  for pid in "${sidecar_pids[@]:-}"; do
     wait "$pid" 2>/dev/null || true
-  done
-  sidecar_pids=()
-  # Drop them from the global cleanup list too.
-  local keep=()
+  fi
+}
+
+drop_from_pids() {
+  local dead="$1" pid keep=()
   for pid in "${pids[@]:-}"; do
-    local alive=0
-    for sp in "${sidecar_pids[@]:-}"; do
-      [[ "$pid" == "$sp" ]] && alive=1
-    done
-    # keep everything that is not a just-killed sidecar: they are already dead
-    # so filtering by liveness is enough
-    if kill -0 "$pid" 2>/dev/null; then
-      keep+=("$pid")
-    fi
+    [[ "$pid" == "$dead" ]] || keep+=("$pid")
   done
   pids=("${keep[@]:-}")
-  echo "[sidecars] $(date +%T) stopped" >>"$OUTDIR/sidecars.log"
+}
+
+stop_back() {
+  if [[ -n "$back_pid" ]]; then
+    stop_pid "$back_pid"
+    drop_from_pids "$back_pid"
+    echo "[back] $(date +%T) stopped pid=$back_pid" >>"$OUTDIR/cameras.log"
+    back_pid=""
+  fi
+}
+
+stop_sidecars() {
+  local pid
+  for pid in "${sidecar_pids[@]:-}"; do
+    stop_pid "$pid"
+    drop_from_pids "$pid"
+  done
+  if [[ ${#sidecar_pids[@]} -gt 0 ]]; then
+    echo "[sidecars] $(date +%T) stopped" >>"$OUTDIR/cameras.log"
+  fi
+  sidecar_pids=()
 }
 
 start_sidecars() {
@@ -179,15 +200,23 @@ start_sidecars() {
   for name in $SIDECARS; do
     dev="/dev/rgb_camera_${name}"
     if [[ ! -c "$dev" ]]; then
-      echo "WARN: sidecar $dev missing — skip" >>"$OUTDIR/sidecars.log"
+      echo "WARN: sidecar $dev missing — skip" >>"$OUTDIR/cameras.log"
       continue
     fi
     log="$OUTDIR/sidecar_${name}.log"
     pid="$(start_ffplay "$dev" "$w" "$h" "$log")"
     sidecar_pids+=("$pid")
     pids+=("$pid")
-    echo "[sidecars] $(date +%T) started $name pid=$pid ${w}x${h}" >>"$OUTDIR/sidecars.log"
+    echo "[sidecars] $(date +%T) started $name pid=$pid ${w}x${h}" >>"$OUTDIR/cameras.log"
   done
+}
+
+start_back() {
+  # $1=W $2=H $3=log
+  stop_back
+  back_pid="$(start_ffplay "$BACK_DEVICE" "$1" "$2" "$3")"
+  pids+=("$back_pid")
+  echo "[back] $(date +%T) started pid=$back_pid ${1}x${2}" >>"$OUTDIR/cameras.log"
 }
 
 # --- banner -----------------------------------------------------------------
@@ -219,11 +248,16 @@ phase="low+sidecars"
 while [[ $(date +%s) -lt $DEADLINE ]]; do
   STEP=$((STEP + 1))
 
+  # Lifecycle order (operator requirement):
+  #   into low+sidecars : sidecars first, then back @ low
+  #   into high-solo    : stop back first, then sidecars, then back @ high
   if [[ "$phase" == "low+sidecars" ]]; then
     res="$LOW_RES"
+    stop_back
     start_sidecars
   else
     res="$HIGH_RES"
+    stop_back
     stop_sidecars
   fi
 
@@ -235,8 +269,8 @@ while [[ $(date +%s) -lt $DEADLINE ]]; do
 
   echo "[step $STEP] $(date +%T) phase=$phase back ${W}x${H}" | tee -a "$SUMMARY"
 
-  FPID="$(start_ffplay "$BACK_DEVICE" "$W" "$H" "$LOG")"
-  pids+=("$FPID")
+  start_back "$W" "$H" "$LOG"
+  FPID="$back_pid"
 
   # Always hold the phase for the full SWITCH_INTERVAL. An early ffplay
   # exit must NOT shorten the step (that made switches look <2s).
@@ -268,12 +302,8 @@ while [[ $(date +%s) -lt $DEADLINE ]]; do
     wait "$FPID" 2>/dev/null
     RC=$?
   fi
-
-  keep=()
-  for pid in "${pids[@]:-}"; do
-    [[ "$pid" == "$FPID" ]] || keep+=("$pid")
-  done
-  pids=("${keep[@]:-}")
+  drop_from_pids "$FPID"
+  back_pid=""
 
   MEM_AFTER="$(mem_available_kb)"
   MARKERS="$(oom_since_lines "$MSG_BEFORE")"
@@ -316,7 +346,8 @@ while [[ $(date +%s) -lt $DEADLINE ]]; do
   fi
 done
 
-# ensure sidecars are gone before exit
+# Teardown order: back first, then sidecars.
+stop_back
 stop_sidecars
 
 echo | tee -a "$SUMMARY"
