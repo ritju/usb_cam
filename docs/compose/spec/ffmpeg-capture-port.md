@@ -24,6 +24,8 @@ commits: dfb0bff..563dfc6
 7. **频繁切换 OOM（uvcvideo URB -1 + dwMaxPayload 垃圾值）** 与 sizeimage-guard H1–H3 同族；FFmpeg port 拆掉了 `validate_sizeimage` 后 REQBUFS 会照单全收驱动垃圾。补 `device_preflight`：设备就绪门、只读 `VIDIOC_G_FMT` sizeimage 拒绝、`VmPeak` 前后追踪、close→open 500ms 去抖；未就绪/尺寸不合理直接拒绝进 FFmpeg。
 8. **僵死 UVC 流靠手动 ffplay 恢复** — 不操作相机时持续吐异常数据，`ffplay` 一次 S_FMT+STREAM 往返即好。补自动恢复看门狗：坏帧（纯色填充 / raw_mjpeg 无 SOI）与连续软失败累积后按 L1 flush → L2 流重启 → L3 整机 reopen 升级（L3 即 ffplay 等价），带 1s 限速；`recover_now()` 可手动触发。
 9. **open 期 sizeimage 垃圾只挡不救** — 纯 `G_FMT` 预检会 throw，L3 重开撞同一堵墙，失败后还留下无 fd 的 `grab` 硬抛。补 `kick_s_fmt_and_probe`（S_FMT 踢一脚让驱动重算 sizeimage，即 ffplay 在 open 做的事）+ 3 次重试；reopen 失败保持可恢复（orphaned 状态直接升 L3，`grab` 不再 throw）。
+10. **G_FMT 干净仍 OOM（对照 ffplay.c）** — ffplay **无** sizeimage/REQBUFS 防护；缺口是只对“当前格式”G_FMT，FFmpeg 在 `avformat_open_input` 内再 S_FMT 后 REQBUFS 新 sizeimage。改为 `negotiate_and_verify`：**无条件**用目标几何 S_FMT→G_FMT 通过才进 FFmpeg；`av_max_alloc` 封顶用户态 `av_new_packet`；`avformat_alloc_context`+interrupt；open 失败指数退避，streak≥5 停火。
+11. **相对 s1_gpu 的 B/R 互换** — s1_gpu 用 `sizeof(vector)` 恒真，每帧把 encoding 重置为 `rgb8`，掩盖 undistort 后 BGR8 不刷新问题。resize 条件修为 `data.size()` 后真 bug 暴露。每帧 grab 前 `encoding = get_encoding()`。
 
 ## [S1] Problem
 
