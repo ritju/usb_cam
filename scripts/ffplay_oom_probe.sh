@@ -27,16 +27,13 @@
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
 
-# ffplay_oom_probe.sh — multi-camera OOM probe, runs on the HOST (outside
-# any container), no ROS / no undistort.
+# ffplay_oom_probe.sh — host-side attribution matrix (no ROS / no undistort).
 #
-#   rgb_camera_(front|left|right)  continuously played in the background
-#   rgb_camera_back                resolution switched every SWITCH_INTERVAL
+#   back camera 640x480   -> phase low+sidecars  : play with front/left/right
+#   back camera 1280x1024 -> phase high-solo     : sidecars STOPPED, back only
 #
-# Goal: reproduce resolution-switch OOM under real multi-camera load and
-# attribute the fault:
-#   probe FAILs  -> UVC / libavdevice / REQBUFS (not usb_cam)
-#   probe PASSes -> our open/grab path still at fault
+# Switches every SWITCH_INTERVAL seconds. OOM in a given phase tells you
+# whether the fault is high-resolution REQBUFS alone, or multi-camera load.
 
 set -u
 
@@ -44,34 +41,31 @@ usage() {
   cat <<'EOF'
 Usage: ffplay_oom_probe.sh [--help]
 
-Runs on the host against the /dev/rgb_camera_* nodes.
+Host-side probe against /dev/rgb_camera_* (not inside a container).
 
-  Continuous play (background ffplay, restarted if it dies):
-    /dev/rgb_camera_front
-    /dev/rgb_camera_left
-    /dev/rgb_camera_right
-
-  Resolution switch (foreground, every SWITCH_INTERVAL seconds):
-    /dev/rgb_camera_back
-    walks RESOLUTIONS, one step per interval
+Phases (alternating every SWITCH_INTERVAL seconds):
+  low+sidecars   back=640x480   WITH rgb_camera_(front|left|right) playing
+  high-solo      back=1280x1024 sidecars stopped (back camera alone)
 
 Environment:
-  SWITCH_INTERVAL   seconds between back-camera resolution switches (default: 5)
-  RESOLUTIONS       space-separated WxH list for the back camera
-                    (default: "640x480 800x600 1280x720 1280x1024 1920x1080")
-  DURATION          total probe runtime seconds (default: 300 = 5 min)
-  FRAMERATE         fps for every ffplay (default: 10)
-  INPUT_FORMAT      FFmpeg input_format (default: mjpeg = mjpeg2rgb)
-  SIDECARS          sidecar device basenames (default: "front left right")
-  BACK_DEVICE       back device path (default: /dev/rgb_camera_back)
-  RESIZE_ON_START   1 = a switch happens immediately (default: 1)
-  OUTDIR            log directory (default: /tmp/ffplay_oom_probe_<ts>)
-  SHOW=1            open sidecar windows (needs DISPLAY); back always -nodisp
-  FFPLAY            ffplay binary (default: ffplay)
+  SWITCH_INTERVAL  seconds per phase (default: 5)
+  DURATION         total runtime seconds (default: 300)
+  FRAMERATE        fps (default: 10)
+  INPUT_FORMAT     FFmpeg input_format (default: mjpeg = mjpeg2rgb)
+  SIDECARS         sidecar names (default: "front left right")
+  BACK_DEVICE      back device (default: /dev/rgb_camera_back)
+  OUTDIR           logs (default: /tmp/ffplay_oom_probe_<ts>)
+  FFPLAY           binary (default: ffplay)
 
-Example (host):
+Example:
   ./scripts/ffplay_oom_probe.sh
-  SWITCH_INTERVAL=5 DURATION=600 ./scripts/ffplay_oom_probe.sh
+  SWITCH_INTERVAL=5 DURATION=120 ./scripts/ffplay_oom_probe.sh
+
+Interpretation:
+  FAIL only in high-solo   -> high-res REQBUFS / sizeimage on back alone
+  FAIL only in low+sidecars-> multi-camera USB / memory pressure
+  FAIL in both             -> switching or leftover UVC state
+  PASS both                -> not reproduced; tighten interval / duration
 EOF
 }
 
@@ -81,17 +75,17 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
 fi
 
 SWITCH_INTERVAL="${SWITCH_INTERVAL:-5}"
-RESOLUTIONS="${RESOLUTIONS:-640x480 800x600 1280x720 1280x1024 1920x1080}"
 DURATION="${DURATION:-300}"
 FRAMERATE="${FRAMERATE:-10}"
 INPUT_FORMAT="${INPUT_FORMAT:-mjpeg}"
 SIDECARS="${SIDECARS:-front left right}"
 BACK_DEVICE="${BACK_DEVICE:-/dev/rgb_camera_back}"
-RESIZE_ON_START="${RESIZE_ON_START:-1}"
 FFPLAY="${FFPLAY:-ffplay}"
-SHOW="${SHOW:-0}"
 TS="$(date +%Y%m%d-%H%M%S)"
 OUTDIR="${OUTDIR:-/tmp/ffplay_oom_probe_${TS}}"
+
+LOW_RES="${LOW_RES:-640x480}"
+HIGH_RES="${HIGH_RES:-1280x1024}"
 
 if ! command -v "$FFPLAY" >/dev/null 2>&1; then
   echo "ERROR: ffplay not found (FFPLAY=$FFPLAY)" >&2
@@ -107,10 +101,7 @@ fi
 mkdir -p "$OUTDIR"
 SUMMARY="$OUTDIR/summary.txt"
 
-# --- helpers ---------------------------------------------------------------
-
 pids=()
-sidecar_logs=()
 
 cleanup() {
   trap - EXIT INT TERM
@@ -125,19 +116,16 @@ mem_available_kb() {
   awk '/MemAvailable:/ {print $2}' /proc/meminfo 2>/dev/null || echo 0
 }
 
-dmesg_oom_lines() {
-  dmesg 2>/dev/null | tail -n 3000 | grep -E \
+oom_since_lines() {
+  # $1 = previous dmesg line count
+  dmesg 2>/dev/null | tail -n +"$(($1 + 1))" 2>/dev/null | grep -E \
     'Out of memory|oom-kill|Killed process|uvcvideo|Failed to resubmit|UVC non compliance|vb2' \
     || true
 }
 
-ffplay_cmd() {
-  # $1=device $2=width $3=height $4=extra nodisp?
-  local dev="$1" w="$2" h="$3"
-  local -a disp=(-nodisp)
-  if [[ "$SHOW" == "1" && -n "${DISPLAY:-}" && "$dev" != "$BACK_DEVICE" ]]; then
-    disp=()
-  fi
+start_ffplay() {
+  # $1=device $2=W $3=H $4=log  -> echoes pid
+  local dev="$1" w="$2" h="$3" log="$4"
   "$FFPLAY" -loglevel warning \
     -f v4l2 \
     -input_format "$INPUT_FORMAT" \
@@ -145,85 +133,106 @@ ffplay_cmd() {
     -framerate "$FRAMERATE" \
     -i "$dev" \
     -autoexit \
-    "${disp[@]}"
+    -nodisp \
+    >"$log" 2>&1 &
+  echo $!
 }
 
-# Keep one ffplay alive on a device at a fixed geometry (sidecars).
-keep_alive() {
-  local name="$1" dev="$2" w="$3" h="$4"
-  local log="$OUTDIR/sidecar_${name}.log"
-  sidecar_logs+=("$log")
-  (
-    while true; do
-      echo "[sidecar $name] $(date +%T) play ${w}x${h} on $dev" >>"$log"
-      ffplay_cmd "$dev" "$w" "$h" >>"$log" 2>&1
-      echo "[sidecar $name] $(date +%T) ffplay exited rc=$?" >>"$log"
-      sleep 1
+# --- sidecar control --------------------------------------------------------
+
+sidecar_pids=()
+
+stop_sidecars() {
+  local name pid
+  for pid in "${sidecar_pids[@]:-}"; do
+    kill "$pid" 2>/dev/null || true
+  done
+  for pid in "${sidecar_pids[@]:-}"; do
+    wait "$pid" 2>/dev/null || true
+  done
+  sidecar_pids=()
+  # Drop them from the global cleanup list too.
+  local keep=()
+  for pid in "${pids[@]:-}"; do
+    local alive=0
+    for sp in "${sidecar_pids[@]:-}"; do
+      [[ "$pid" == "$sp" ]] && alive=1
     done
-  ) &
-  pids+=($!)
+    # keep everything that is not a just-killed sidecar: they are already dead
+    # so filtering by liveness is enough
+    if kill -0 "$pid" 2>/dev/null; then
+      keep+=("$pid")
+    fi
+  done
+  pids=("${keep[@]:-}")
+  echo "[sidecars] $(date +%T) stopped" >>"$OUTDIR/sidecars.log"
 }
 
-# --- banner ----------------------------------------------------------------
+start_sidecars() {
+  local name dev log pid w h
+  w="${LOW_RES%x*}"
+  h="${LOW_RES#*x}"
+  for name in $SIDECARS; do
+    dev="/dev/rgb_camera_${name}"
+    if [[ ! -c "$dev" ]]; then
+      echo "WARN: sidecar $dev missing — skip" >>"$OUTDIR/sidecars.log"
+      continue
+    fi
+    log="$OUTDIR/sidecar_${name}.log"
+    pid="$(start_ffplay "$dev" "$w" "$h" "$log")"
+    sidecar_pids+=("$pid")
+    pids+=("$pid")
+    echo "[sidecars] $(date +%T) started $name pid=$pid ${w}x${h}" >>"$OUTDIR/sidecars.log"
+  done
+}
+
+# --- banner -----------------------------------------------------------------
 
 {
-  echo "ffplay multi-camera OOM probe ($(date))"
-  echo "  back=$BACK_DEVICE switch every ${SWITCH_INTERVAL}s resolutions=$RESOLUTIONS"
-  echo "  sidecars=$SIDECARS (continuous) format=$INPUT_FORMAT fps=$FRAMERATE"
-  echo "  duration=${DURATION}s logs=$OUTDIR"
+  echo "ffplay OOM attribution probe ($(date))"
+  echo "  back=$BACK_DEVICE interval=${SWITCH_INTERVAL}s duration=${DURATION}s"
+  echo "  low+sidecars : $LOW_RES with {$SIDECARS}"
+  echo "  high-solo    : $HIGH_RES alone (sidecars stopped)"
+  echo "  format=$INPUT_FORMAT fps=$FRAMERATE logs=$OUTDIR"
 } | tee "$SUMMARY"
 
-# --- start sidecar players -------------------------------------------------
+# --- phase loop -------------------------------------------------------------
 
-for name in $SIDECARS; do
-  dev="/dev/rgb_camera_${name}"
-  if [[ ! -c "$dev" ]]; then
-    echo "WARN: sidecar $dev missing — skipping" | tee -a "$SUMMARY"
-    continue
-  fi
-  # Sidecars hold a mid resolution so only the back camera stresses switches.
-  keep_alive "$name" "$dev" 640 480
-  echo "sidecar $name started on $dev" | tee -a "$SUMMARY"
-done
+declare -A PHASE_FAILS
+declare -A PHASE_RUNS
+PHASE_FAILS[low+sidecars]=0
+PHASE_FAILS[high-solo]=0
+PHASE_RUNS[low+sidecars]=0
+PHASE_RUNS[high-solo]=0
 
-if [[ "$SHOW" != "1" ]]; then
-  echo "  (sidecars use -nodisp; SHOW=1 to open windows)" | tee -a "$SUMMARY"
-fi
-
-# --- back camera: switch resolution every SWITCH_INTERVAL ------------------
-
-RES_LIST=($RESOLUTIONS)
-NRES=${#RES_LIST[@]}
-if [[ $NRES -eq 0 ]]; then
-  echo "ERROR: RESOLUTIONS is empty" >&2
-  exit 1
-fi
-
-idx=0
-if [[ "$RESIZE_ON_START" != "1" ]]; then
-  idx=0
-fi
-
-FAILS=0
-SWITCHES=0
 DEADLINE=$(( $(date +%s) + DURATION ))
-DMESG_BASE=$(dmesg 2>/dev/null | wc -l)
+STEP=0
+TOTAL_FAILS=0
+
+# Phase order: start low+sidecars so we learn multi-camera first.
+phase="low+sidecars"
 
 while [[ $(date +%s) -lt $DEADLINE ]]; do
-  res="${RES_LIST[$idx]}"
+  STEP=$((STEP + 1))
+
+  if [[ "$phase" == "low+sidecars" ]]; then
+    res="$LOW_RES"
+    start_sidecars
+  else
+    res="$HIGH_RES"
+    stop_sidecars
+  fi
+
   W="${res%x*}"
   H="${res#*x}"
-  SWITCHES=$((SWITCHES + 1))
-  LOG="$OUTDIR/back_${SWITCHES}_${W}x${H}.log"
+  LOG="$OUTDIR/back_${STEP}_${phase}_${W}x${H}.log"
   MEM_BEFORE="$(mem_available_kb)"
   MSG_BEFORE=$(dmesg 2>/dev/null | wc -l)
 
-  echo "[back] $(date +%T) switch -> ${W}x${H} (${SWITCH_INTERVAL}s)" | tee -a "$SUMMARY"
+  echo "[step $STEP] $(date +%T) phase=$phase back ${W}x${H}" | tee -a "$SUMMARY"
 
-  # Run for one switch interval; kill when time is up so we can resize.
-  ffplay_cmd "$BACK_DEVICE" "$W" "$H" >"$LOG" 2>&1 &
-  FPID=$!
-  pids+=($FPID)
+  FPID="$(start_ffplay "$BACK_DEVICE" "$W" "$H" "$LOG")"
+  pids+=("$FPID")
 
   slept=0
   while [[ $slept -lt $SWITCH_INTERVAL ]]; do
@@ -238,33 +247,33 @@ while [[ $(date +%s) -lt $DEADLINE ]]; do
   if kill -0 "$FPID" 2>/dev/null; then
     kill "$FPID" 2>/dev/null || true
     wait "$FPID" 2>/dev/null || true
-    # SIGTERM from us after a full interval is normal, not a failure.
+    # our kill after a full interval is expected
   else
     wait "$FPID" 2>/dev/null
     RC=$?
   fi
-  # drop the finished pid from the list to keep it short
-  new_pids=()
-  for p in "${pids[@]:-}"; do
-    [[ "$p" == "$FPID" ]] || new_pids+=("$p")
+
+  keep=()
+  for pid in "${pids[@]:-}"; do
+    [[ "$pid" == "$FPID" ]] || keep+=("$pid")
   done
-  pids=("${new_pids[@]:-}")
+  pids=("${keep[@]:-}")
 
   MEM_AFTER="$(mem_available_kb)"
-  NEW_DMESG="$(dmesg 2>/dev/null | tail -n +"$((MSG_BEFORE + 1))" 2>/dev/null || true)"
-  MARKERS="$(printf '%s\n' "$NEW_DMESG" | grep -E \
-    'Out of memory|oom-kill|Killed process|uvcvideo|Failed to resubmit|UVC non compliance|vb2' \
-    || true)"
+  MARKERS="$(oom_since_lines "$MSG_BEFORE")"
 
   STATUS="PASS"
-  # rc 0 = played the interval; 137/143 = our kill after interval (ok)
   if [[ $RC -ne 0 && $RC -ne 137 && $RC -ne 143 ]]; then
     STATUS="FAIL"
-    FAILS=$((FAILS + 1))
   fi
   if [[ -n "$MARKERS" ]]; then
     STATUS="FAIL"
-    FAILS=$((FAILS + 1))
+  fi
+
+  PHASE_RUNS[$phase]=$(( ${PHASE_RUNS[$phase]} + 1 ))
+  if [[ "$STATUS" == "FAIL" ]]; then
+    PHASE_FAILS[$phase]=$(( ${PHASE_FAILS[$phase]} + 1 ))
+    TOTAL_FAILS=$((TOTAL_FAILS + 1))
   fi
 
   {
@@ -275,38 +284,40 @@ while [[ $(date +%s) -lt $DEADLINE ]]; do
     fi
     if [[ "$STATUS" == "FAIL" && -s "$LOG" ]]; then
       echo "  ffplay stderr (tail):"
-      tail -n 15 "$LOG" | sed 's/^/    /'
+      tail -n 12 "$LOG" | sed 's/^/    /'
     fi
   } | tee -a "$SUMMARY"
 
-  # Sidecar health: any that died while we were not looking are a signal.
-  for name in $SIDECARS; do
-    dev="/dev/rgb_camera_${name}"
-    [[ -c "$dev" ]] || continue
-  done
-
-  idx=$(( (idx + 1) % NRES ))
+  # alternate phase
+  if [[ "$phase" == "low+sidecars" ]]; then
+    phase="high-solo"
+  else
+    phase="low+sidecars"
+  fi
 done
 
-# --- final OOM scan --------------------------------------------------------
-
-FINAL_MARKERS="$(dmesg_oom_lines)"
-if [[ -n "$FINAL_MARKERS" ]]; then
-  echo | tee -a "$SUMMARY"
-  echo "dmesg OOM/uvc markers during run:" | tee -a "$SUMMARY"
-  printf '%s\n' "$FINAL_MARKERS" | sed 's/^/  /' | tee -a "$SUMMARY"
-  FAILS=$((FAILS + 1))
-fi
-
-cleanup
+# ensure sidecars are gone before exit
+stop_sidecars
 
 echo | tee -a "$SUMMARY"
-if [[ $FAILS -eq 0 ]]; then
-  echo "RESULT: PASS ($SWITCHES back switches, sidecars held, no OOM markers)" | tee -a "$SUMMARY"
-  echo "If usb_cam still OOMs on this host, the bug is in our open/grab path." | tee -a "$SUMMARY"
+echo "Phase summary:" | tee -a "$SUMMARY"
+for p in "low+sidecars" "high-solo"; do
+  echo "  $p : ${PHASE_FAILS[$p]} FAIL / ${PHASE_RUNS[$p]} runs" | tee -a "$SUMMARY"
+done
+
+echo | tee -a "$SUMMARY"
+if [[ $TOTAL_FAILS -eq 0 ]]; then
+  echo "RESULT: PASS ($STEP steps, no OOM markers)" | tee -a "$SUMMARY"
+  echo "Not reproduced — try longer DURATION or SWITCH_INTERVAL=2." | tee -a "$SUMMARY"
   exit 0
 fi
 
-echo "RESULT: FAIL ($FAILS issues, $SWITCHES back switches) — see $OUTDIR" | tee -a "$SUMMARY"
-echo "If ffplay also OOMs with sidecars running, fault is UVC/libavdevice/REQBUFS." | tee -a "$SUMMARY"
+echo "RESULT: FAIL ($TOTAL_FAILS steps) — see $OUTDIR" | tee -a "$SUMMARY"
+if [[ ${PHASE_FAILS[high-solo]} -gt 0 && ${PHASE_FAILS[low+sidecars]} -eq 0 ]]; then
+  echo "Hint: only high-solo failed -> high-res REQBUFS/sizeimage on back alone." | tee -a "$SUMMARY"
+elif [[ ${PHASE_FAILS[low+sidecars]} -gt 0 && ${PHASE_FAILS[high-solo]} -eq 0 ]]; then
+  echo "Hint: only low+sidecars failed -> multi-camera USB/memory pressure." | tee -a "$SUMMARY"
+else
+  echo "Hint: both phases failed -> resolution switch / leftover UVC state." | tee -a "$SUMMARY"
+fi
 exit 1
