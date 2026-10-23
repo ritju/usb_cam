@@ -169,6 +169,10 @@ stop_sidecars() {
 }
 
 start_sidecars() {
+  # Idempotent: never stack a second set on top of a live one.
+  if [[ ${#sidecar_pids[@]} -gt 0 ]]; then
+    return 0
+  fi
   local name dev log pid w h
   w="${LOW_RES%x*}"
   h="${LOW_RES#*x}"
@@ -234,13 +238,25 @@ while [[ $(date +%s) -lt $DEADLINE ]]; do
   FPID="$(start_ffplay "$BACK_DEVICE" "$W" "$H" "$LOG")"
   pids+=("$FPID")
 
-  slept=0
-  while [[ $slept -lt $SWITCH_INTERVAL ]]; do
-    if ! kill -0 "$FPID" 2>/dev/null; then
+  # Always hold the phase for the full SWITCH_INTERVAL. An early ffplay
+  # exit must NOT shorten the step (that made switches look <2s).
+  PHASE_END=$(( $(date +%s) + SWITCH_INTERVAL ))
+  DIED_EARLY=0
+  while [[ $(date +%s) -lt $PHASE_END ]]; do
+    if [[ $DIED_EARLY -eq 0 ]] && ! kill -0 "$FPID" 2>/dev/null; then
+      DIED_EARLY=1
+    fi
+    # Sleep the remaining time (capped at 1s) so we overshoot less.
+    now=$(date +%s)
+    remain=$(( PHASE_END - now ))
+    if [[ $remain -le 0 ]]; then
       break
     fi
-    sleep 1
-    slept=$((slept + 1))
+    if [[ $remain -gt 1 ]]; then
+      sleep 1
+    else
+      sleep "$remain"
+    fi
   done
 
   RC=0
@@ -264,6 +280,10 @@ while [[ $(date +%s) -lt $DEADLINE ]]; do
 
   STATUS="PASS"
   if [[ $RC -ne 0 && $RC -ne 137 && $RC -ne 143 ]]; then
+    STATUS="FAIL"
+  fi
+  if [[ $DIED_EARLY -eq 1 ]]; then
+    # ffplay left before the phase finished — that is a failure even on rc=0.
     STATUS="FAIL"
   fi
   if [[ -n "$MARKERS" ]]; then
