@@ -116,13 +116,13 @@ void FfmpegCapture::open(const capture_config_t & config)
         "ms");
       std::this_thread::sleep_for(wait);
     }
-    // Stop thrashing: after 5 consecutive fails make the caller wait longer
-    // (still return control — node may reconfigure or operator may heal).
+    // Stop thrashing: after 5 consecutive fails do not touch the device
+    // again — caller/`recover_now()`/reconfigure must intervene.
     if (m_open_fail_streak >= 5) {
-      log(
-        log_level_t::ERROR,
-        "open fail streak=" + std::to_string(m_open_fail_streak) +
-        "; refusing to auto-thrash. External recover_now()/reconfigure required.");
+      throw std::runtime_error(
+              "open fail streak=" + std::to_string(m_open_fail_streak) +
+              " on " + config.device_path +
+              "; refusing to auto-thrash. External recover_now()/reconfigure required.");
     }
   }
 
@@ -196,7 +196,10 @@ void FfmpegCapture::open(const capture_config_t & config)
       throw std::runtime_error(
               "refusing avformat_open_input on " + m_device_path + ": " + last_reason);
     }
-    m_open_fail_streak = 0;
+    // C4: do NOT clear m_open_fail_streak here — only a fully successful
+    // avformat_open_input clears it. Otherwise post-negotiate failures
+    // (ENOMEM from av_max_alloc, demuxer open errors) stay at streak=1 and
+    // exponential backoff never engages.
   }
 
   // C2: cap FFmpeg userspace allocs so a garbage sizeimage cannot av_new_packet
@@ -269,6 +272,8 @@ void FfmpegCapture::open(const capture_config_t & config)
             "Failed to open `" + m_device_path + "` with input_format `" +
             m_format.input_format + "`: " + errbuf);
   }
+  // Only a successful demuxer open clears the fail streak (C4).
+  m_open_fail_streak = 0;
 
   ret = avformat_find_stream_info(m_fmt_ctx, nullptr);
   if (ret < 0) {

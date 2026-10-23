@@ -267,15 +267,14 @@ inline bool kick_s_fmt_and_probe(
   }
 
   int rc = ::ioctl(fd, VIDIOC_S_FMT, &fmt);
-  if (rc < 0) {
-    // TRY_FMT is a softer kick if the device refuses S_FMT while busy.
-    rc = ::ioctl(fd, VIDIOC_TRY_FMT, &fmt);
-  }
   const int saved = errno;
   if (rc < 0) {
+    // Do NOT fall back to TRY_FMT: it does not commit a format, so a
+    // following G_FMT reads the *old* current sizeimage — the exact false
+    // pass the target-format gate is meant to close. Fail closed.
     ::close(fd);
     if (err) {
-      *err = "VIDIOC_S_FMT/TRY_FMT failed on " + path + ": " + std::strerror(saved);
+      *err = "VIDIOC_S_FMT failed on " + path + ": " + std::strerror(saved);
     }
     return false;
   }
