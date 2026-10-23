@@ -50,8 +50,11 @@ Phases (alternating every SWITCH_INTERVAL seconds):
 Environment:
   SWITCH_INTERVAL  seconds per phase (default: 5)
   DURATION         total runtime seconds (default: 300)
-  FRAMERATE        fps (default: 10)
-  INPUT_FORMAT     FFmpeg input_format (default: mjpeg = mjpeg2rgb)
+  FRAMERATE        fps (default: 10). Set empty to omit -framerate
+  INPUT_FORMAT     FFmpeg input_format; empty = omit/auto (default: empty).
+                   A wrong value yields "Failed to open file ... or
+                   configure filtergraph". Try mjpeg/yuyv422 only if needed.
+  FFPLAY_EXTRA     extra ffplay args (e.g. "-an")
   SIDECARS         sidecar names (default: "front left right")
   BACK_DEVICE      back device (default: /dev/rgb_camera_back)
   OUTDIR           logs (default: /tmp/ffplay_oom_probe_<ts>)
@@ -77,7 +80,9 @@ fi
 SWITCH_INTERVAL="${SWITCH_INTERVAL:-5}"
 DURATION="${DURATION:-300}"
 FRAMERATE="${FRAMERATE:-10}"
-INPUT_FORMAT="${INPUT_FORMAT:-mjpeg}"
+# Empty = do not pass -input_format (auto). The known-good host command
+# is `ffplay -f v4l2 -video_size 640x480 /dev/rgb_camera_back` without it.
+INPUT_FORMAT="${INPUT_FORMAT:-}"
 SIDECARS="${SIDECARS:-front left right}"
 BACK_DEVICE="${BACK_DEVICE:-/dev/rgb_camera_back}"
 FFPLAY="${FFPLAY:-ffplay}"
@@ -130,16 +135,31 @@ oom_since_lines() {
 
 start_ffplay() {
   # $1=device $2=W $3=H $4=log  -> echoes pid
+  #
+  # Match the known-good host form:
+  #   ffplay -f v4l2 -video_size WxH /dev/rgb_camera_back
+  # Do NOT pass -nodisp/-autoexit here: on a headless/no-GL setup those
+  # make ffplay fail with "configure filtergraph" even when the device
+  # opens fine. INPUT_FORMAT empty means auto (omit -input_format).
   local dev="$1" w="$2" h="$3" log="$4"
-  "$FFPLAY" -loglevel warning \
-    -f v4l2 \
-    -input_format "$INPUT_FORMAT" \
-    -video_size "${w}x${h}" \
-    -framerate "$FRAMERATE" \
-    -i "$dev" \
-    -autoexit \
-    -nodisp \
-    >"$log" 2>&1 &
+  local -a args=(
+    -loglevel warning
+    -f v4l2
+    -video_size "${w}x${h}"
+  )
+  if [[ -n "$INPUT_FORMAT" ]]; then
+    args+=(-input_format "$INPUT_FORMAT")
+  fi
+  if [[ -n "$FRAMERATE" ]]; then
+    args+=(-framerate "$FRAMERATE")
+  fi
+  args+=(-i "$dev")
+  # Extra args for experiments, e.g. FFPLAY_EXTRA="-an"
+  if [[ -n "${FFPLAY_EXTRA:-}" ]]; then
+    # shellcheck disable=SC2206
+    args+=($FFPLAY_EXTRA)
+  fi
+  "$FFPLAY" "${args[@]}" >"$log" 2>&1 &
   echo $!
 }
 
@@ -226,7 +246,7 @@ start_back() {
   echo "  back=$BACK_DEVICE interval=${SWITCH_INTERVAL}s duration=${DURATION}s"
   echo "  low+sidecars : $LOW_RES with {$SIDECARS}"
   echo "  high-solo    : $HIGH_RES alone (sidecars stopped)"
-  echo "  format=$INPUT_FORMAT fps=$FRAMERATE logs=$OUTDIR"
+  echo "  format=${INPUT_FORMAT:-auto} fps=${FRAMERATE:-auto} logs=$OUTDIR"
 } | tee "$SUMMARY"
 
 # --- phase loop -------------------------------------------------------------
